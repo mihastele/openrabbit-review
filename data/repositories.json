@@ -1,0 +1,14 @@
+[
+  {
+    "id": "repo_943c1b04d219",
+    "name": "mihastele/openrabbit-review",
+    "path": "D:\\development\\opensource\\openRabbit",
+    "branch": "main",
+    "remoteUrl": "https://github.com/mihastele/openrabbit-review.git",
+    "isClean": false,
+    "headSha": "32c8bae5203ff0dad1f8e5b68164fa173c39a705",
+    "lastCommitMessage": "Add language strategies",
+    "lastCommitDate": "2026-10-18T17:48:35+02:00",
+    "addedAt": "2026-10-18T16:03:49.234Z"
+  }
+]

@@ -370,3 +370,170 @@ export async function handleGitHubWebhookEvent(
     postedToGitHub: false,
   };
 }
+
+export async function fetchGitHubCommitDiff(
+  owner: string,
+  repo: string,
+  commitSha: string,
+  token?: string
+): Promise<string> {
+  const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(
+    /\/$/,
+    ''
+  );
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3.diff',
+    'User-Agent': 'OpenRabbit-Bot/1.0',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(
+    `${apiUrl}/repos/${owner}/${repo}/commits/${commitSha}`,
+    { headers }
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Failed to fetch GitHub commit diff (${res.status}): ${await res.text()}`
+    );
+  }
+  return await res.text();
+}
+
+export async function fetchGitHubPRDetails(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  token?: string
+): Promise<{
+  title: string;
+  headSha: string;
+  baseBranch: string;
+  headBranch: string;
+  author: string;
+}> {
+  const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(
+    /\/$/,
+    ''
+  );
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'OpenRabbit-Bot/1.0',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(
+    `${apiUrl}/repos/${owner}/${repo}/pulls/${pullNumber}`,
+    { headers }
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Failed to fetch GitHub PR details (${res.status}): ${await res.text()}`
+    );
+  }
+  const data = (await res.json()) as any;
+  return {
+    title: data.title || `PR #${pullNumber}`,
+    headSha: data.head?.sha || 'HEAD',
+    baseBranch: data.base?.ref || 'main',
+    headBranch: data.head?.ref || 'update',
+    author: data.user?.login || 'developer',
+  };
+}
+
+export async function runGitHubOnDemandReview(params: {
+  owner: string;
+  repo: string;
+  pullNumber?: number;
+  commitSha?: string;
+  token?: string;
+  postComment?: boolean;
+  config?: OpenRabbitConfig;
+}): Promise<ReviewResult> {
+  const token = params.token || process.env.GITHUB_TOKEN;
+  let rawDiff = '';
+  let prTitle = `GitHub Review: ${params.owner}/${params.repo}`;
+  let commitSha = params.commitSha || 'HEAD';
+  let baseBranch: string | undefined = undefined;
+  let headBranch: string | undefined = undefined;
+  let author: string | undefined = undefined;
+
+  let config = params.config || structuredClone(DEFAULT_OPENRABBIT_CONFIG);
+
+  if (params.pullNumber) {
+    rawDiff = await fetchGitHubPRDiff(
+      params.owner,
+      params.repo,
+      params.pullNumber,
+      token
+    );
+    try {
+      const details = await fetchGitHubPRDetails(
+        params.owner,
+        params.repo,
+        params.pullNumber,
+        token
+      );
+      prTitle = details.title;
+      commitSha = details.headSha;
+      baseBranch = details.baseBranch;
+      headBranch = details.headBranch;
+      author = details.author;
+    } catch {
+      prTitle = `PR #${params.pullNumber} (${params.owner}/${params.repo})`;
+    }
+    if (token) {
+      config = await fetchGitHubRepoConfig(
+        params.owner,
+        params.repo,
+        commitSha,
+        token
+      );
+    }
+  } else if (params.commitSha) {
+    rawDiff = await fetchGitHubCommitDiff(
+      params.owner,
+      params.repo,
+      params.commitSha,
+      token
+    );
+    prTitle = `Commit ${params.commitSha.slice(0, 7)} (${params.owner}/${params.repo})`;
+  } else {
+    throw new Error('Either pullNumber or commitSha is required');
+  }
+
+  const reviewResult = await runPullRequestReview({
+    rawDiff,
+    prTitle,
+    repository: `${params.owner}/${params.repo}`,
+    prNumber: params.pullNumber,
+    author,
+    baseBranch,
+    headBranch,
+    commitSha,
+    source: 'github',
+    config,
+  });
+
+  if (params.postComment && token && params.pullNumber) {
+    await upsertGitHubWalkthroughComment(
+      params.owner,
+      params.repo,
+      params.pullNumber,
+      reviewResult.markdownWalkthrough,
+      token
+    );
+    if (reviewResult.findings.length > 0) {
+      await postGitHubInlineReview(
+        params.owner,
+        params.repo,
+        params.pullNumber,
+        commitSha,
+        reviewResult.findings,
+        token
+      );
+    }
+  }
+
+  return reviewResult;
+}
+

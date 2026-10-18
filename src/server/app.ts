@@ -10,18 +10,31 @@ import {
 } from '../config/config-loader.js';
 import { handlePRChat } from '../core/chat-engine.js';
 import { parseUnifiedDiff } from '../core/diff-parser.js';
-import { getLocalGitDiff } from '../core/git-utils.js';
+import {
+  getCommitDiff,
+  getLocalGitDiff,
+  getRepoCommits,
+  getRepoMetadata,
+  validateGitRepository,
+} from '../core/git-utils.js';
 import {
   getProvidersStatus,
   resolveActiveProvider,
 } from '../core/llm-provider.js';
 import { runPullRequestReview } from '../core/review-engine.js';
 import {
+  handleBitbucketWebhookEvent,
+  runBitbucketOnDemandReview,
+  verifyBitbucketWebhook,
+} from '../integrations/bitbucket.js';
+import {
   handleGitHubWebhookEvent,
+  runGitHubOnDemandReview,
   verifyGitHubWebhookSignature,
 } from '../integrations/github.js';
 import {
   handleGitLabWebhookEvent,
+  runGitLabOnDemandReview,
   verifyGitLabWebhookToken,
 } from '../integrations/gitlab.js';
 import {
@@ -117,6 +130,7 @@ export async function createOpenRabbitServer(options: {
           config.llm.model
         );
         const analytics = await store.getAnalyticsSummary();
+        const repositories = await store.listRepositories();
         sendJson(res, 200, {
           version: '1.0.0',
           activeProvider,
@@ -125,9 +139,11 @@ export async function createOpenRabbitServer(options: {
           configPath,
           yamlConfig: serializeConfigToYaml(config),
           analytics,
+          repositoriesCount: repositories.length,
           webhooks: {
             githubConfigured: Boolean(process.env.GITHUB_TOKEN),
             gitlabConfigured: Boolean(process.env.GITLAB_TOKEN),
+            bitbucketConfigured: Boolean(process.env.BITBUCKET_TOKEN),
           },
         });
         return;
@@ -295,7 +311,262 @@ export async function createOpenRabbitServer(options: {
       }
 
       // ======================================================================
-      // GitHub & GitLab Webhook Endpoints
+      // Local Repositories Management & Commit Exploration
+      // ======================================================================
+      if (pathname === '/api/repos' && req.method === 'GET') {
+        const repositories = await store.listRepositories();
+        sendJson(res, 200, { repositories });
+        return;
+      }
+
+      if (pathname === '/api/repos' && req.method === 'POST') {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const repoPath = String(body.path || '').trim();
+        if (!repoPath) {
+          sendJson(res, 400, { error: 'Repository path is required.' });
+          return;
+        }
+
+        try {
+          const repo = await store.addRepository(repoPath, body.name);
+          sendJson(res, 201, { repository: repo });
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
+        return;
+      }
+
+      if (
+        (pathname.startsWith('/api/repos/') && req.method === 'DELETE') ||
+        (pathname === '/api/repos' && req.method === 'DELETE')
+      ) {
+        let id = '';
+        if (pathname.startsWith('/api/repos/')) {
+          id = pathname.slice('/api/repos/'.length);
+        } else {
+          id = url.searchParams.get('id') || '';
+          if (!id) {
+            const rawBody = await readBody(req);
+            id = JSON.parse(rawBody || '{}').id || '';
+          }
+        }
+
+        if (!id) {
+          sendJson(res, 400, { error: 'Repository ID or path is required.' });
+          return;
+        }
+
+        const removed = await store.removeRepository(id);
+        sendJson(res, 200, { removed, id });
+        return;
+      }
+
+      if (pathname === '/api/repos/commits' && req.method === 'GET') {
+        const targetIdOrPath =
+          url.searchParams.get('id') ||
+          url.searchParams.get('path') ||
+          workspaceDir;
+        const repo = await store.getRepository(targetIdOrPath);
+        const repoDir = repo ? repo.path : path.resolve(targetIdOrPath);
+
+        const validation = validateGitRepository(repoDir);
+        if (!validation.valid || !validation.topLevel) {
+          sendJson(res, 400, {
+            error: validation.error || `Not a valid git repository: ${repoDir}`,
+          });
+          return;
+        }
+
+        const maxCount = Number(url.searchParams.get('maxCount') || 30);
+        const branch = url.searchParams.get('branch') || undefined;
+        const commits = getRepoCommits(validation.topLevel, { maxCount, branch });
+        sendJson(res, 200, {
+          repository: repo || getRepoMetadata(validation.topLevel),
+          commits,
+        });
+        return;
+      }
+
+      if (pathname === '/api/repos/commit' && req.method === 'GET') {
+        const targetIdOrPath =
+          url.searchParams.get('id') ||
+          url.searchParams.get('path') ||
+          workspaceDir;
+        const sha = url.searchParams.get('sha');
+        if (!sha) {
+          sendJson(res, 400, { error: 'sha parameter is required.' });
+          return;
+        }
+
+        const repo = await store.getRepository(targetIdOrPath);
+        const repoDir = repo ? repo.path : path.resolve(targetIdOrPath);
+
+        try {
+          const commitData = getCommitDiff(repoDir, sha);
+          const parsedDiff = parseUnifiedDiff(commitData.diff);
+          sendJson(res, 200, {
+            commit: commitData.commit,
+            diff: commitData.diff,
+            parsedDiff,
+          });
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
+        return;
+      }
+
+      if (pathname === '/api/repos/review' && req.method === 'POST') {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const targetIdOrPath = body.id || body.path || workspaceDir;
+        const repo = await store.getRepository(targetIdOrPath);
+        const repoDir = repo ? repo.path : path.resolve(targetIdOrPath);
+
+        const localInfo = getLocalGitDiff({
+          cwd: repoDir,
+          commitSha: body.commitSha,
+          commitRange: body.commitRange,
+          staged: Boolean(body.staged),
+          baseBranch: body.baseBranch,
+        });
+
+        if (!localInfo.diff.trim()) {
+          sendJson(res, 200, {
+            empty: true,
+            message:
+              'No diff or changes detected for the specified commit/options in this repository.',
+          });
+          return;
+        }
+
+        const { config: baseConfig } = loadConfig(repoDir);
+        let effectiveConfig = structuredClone(baseConfig);
+        if (body.yamlConfig) effectiveConfig = parseYamlConfig(body.yamlConfig);
+        if (body.profile) effectiveConfig.profile = body.profile;
+        if (body.provider) effectiveConfig.llm.provider = body.provider;
+        if (body.model) effectiveConfig.llm.model = body.model;
+
+        const prTitle = body.commitSha
+          ? `Commit Review: ${localInfo.description} (${repo?.name || localInfo.repoName})`
+          : `Local Review: ${localInfo.description} (${localInfo.branch})`;
+
+        const review = await runPullRequestReview({
+          rawDiff: localInfo.diff,
+          prTitle,
+          repository: repo?.name || localInfo.repoName,
+          author: localInfo.author,
+          headBranch: localInfo.branch,
+          commitSha: localInfo.commitSha,
+          source: 'cli',
+          config: effectiveConfig,
+        });
+
+        await store.addReview(review);
+        const parsedDiff = parseUnifiedDiff(localInfo.diff);
+        const analytics = await store.getAnalyticsSummary();
+
+        sendJson(res, 200, { review, parsedDiff, analytics, localInfo });
+        return;
+      }
+
+      // ======================================================================
+      // On-Demand Integrations Review Endpoints (GitHub, GitLab, Bitbucket)
+      // ======================================================================
+      if (
+        pathname === '/api/integrations/github/review' &&
+        req.method === 'POST'
+      ) {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const { owner, repo, pullNumber, commitSha, token, postComment } = body;
+        if (!owner || !repo) {
+          sendJson(res, 400, { error: 'owner and repo are required.' });
+          return;
+        }
+
+        try {
+          const review = await runGitHubOnDemandReview({
+            owner,
+            repo,
+            pullNumber: pullNumber ? Number(pullNumber) : undefined,
+            commitSha,
+            token,
+            postComment: Boolean(postComment),
+          });
+          await store.addReview(review);
+          const parsedDiff = parseUnifiedDiff(review.rawDiff || '');
+          const analytics = await store.getAnalyticsSummary();
+          sendJson(res, 200, { review, parsedDiff, analytics });
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
+        return;
+      }
+
+      if (
+        pathname === '/api/integrations/gitlab/review' &&
+        req.method === 'POST'
+      ) {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const { projectId, mrIid, commitSha, token } = body;
+        if (!projectId) {
+          sendJson(res, 400, { error: 'projectId is required.' });
+          return;
+        }
+
+        try {
+          const review = await runGitLabOnDemandReview({
+            projectId,
+            mrIid: mrIid ? Number(mrIid) : undefined,
+            commitSha,
+            token,
+          });
+          await store.addReview(review);
+          const parsedDiff = parseUnifiedDiff(review.rawDiff || '');
+          const analytics = await store.getAnalyticsSummary();
+          sendJson(res, 200, { review, parsedDiff, analytics });
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
+        return;
+      }
+
+      if (
+        pathname === '/api/integrations/bitbucket/review' &&
+        req.method === 'POST'
+      ) {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const { workspace, repoSlug, pullRequestId, commitSha, token } = body;
+        if (!workspace || !repoSlug) {
+          sendJson(res, 400, {
+            error: 'workspace and repoSlug are required.',
+          });
+          return;
+        }
+
+        try {
+          const review = await runBitbucketOnDemandReview({
+            workspace,
+            repoSlug,
+            pullRequestId: pullRequestId ? Number(pullRequestId) : undefined,
+            commitSha,
+            token,
+          });
+          await store.addReview(review);
+          const parsedDiff = parseUnifiedDiff(review.rawDiff || '');
+          const analytics = await store.getAnalyticsSummary();
+          sendJson(res, 200, { review, parsedDiff, analytics });
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
+        return;
+      }
+
+      // ======================================================================
+      // Webhook Endpoints (GitHub, GitLab, Bitbucket)
       // ======================================================================
       if (pathname === '/api/webhooks/github' && req.method === 'POST') {
         const rawBody = await readBody(req);
@@ -346,6 +617,38 @@ export async function createOpenRabbitServer(options: {
         const { config } = loadConfig(workspaceDir);
         const result = await handleGitLabWebhookEvent(
           eventHeader,
+          payload,
+          config
+        );
+        if (result.reviewResult) {
+          await store.addReview(result.reviewResult);
+        }
+        sendJson(res, 200, result);
+        return;
+      }
+
+      if (pathname === '/api/webhooks/bitbucket' && req.method === 'POST') {
+        const rawBody = await readBody(req);
+        const sigHeader = (req.headers['x-hub-signature'] ||
+          req.headers['x-hub-signature-256']) as string | undefined;
+        const eventKey =
+          (req.headers['x-event-key'] as string) || 'pullrequest:created';
+
+        if (
+          !verifyBitbucketWebhook(
+            rawBody,
+            sigHeader,
+            process.env.BITBUCKET_WEBHOOK_SECRET
+          )
+        ) {
+          sendJson(res, 401, { error: 'Invalid Bitbucket webhook signature' });
+          return;
+        }
+
+        const payload = JSON.parse(rawBody || '{}');
+        const { config } = loadConfig(workspaceDir);
+        const result = await handleBitbucketWebhookEvent(
+          eventKey,
           payload,
           config
         );

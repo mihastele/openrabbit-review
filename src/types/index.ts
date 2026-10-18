@@ -138,7 +138,7 @@ export interface PRWalkthrough {
 export interface ReviewResult {
   id: string;
   createdAt: string;
-  source: 'cli' | 'github' | 'gitlab' | 'playground';
+  source: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'playground';
   repository: string;
   prNumber?: number;
   prTitle: string;
@@ -192,3 +192,31 @@ export interface ChatResponse {
   providerUsed: string;
   modelUsed: string;
 }
+
+export interface LocalRepoInfo {
+  id: string;
+  name: string;
+  path: string;
+  branch: string;
+  remoteUrl?: string;
+  isClean: boolean;
+  headSha?: string;
+  lastCommitMessage?: string;
+  lastCommitDate?: string;
+  addedAt: string;
+}
+
+export interface LocalCommitInfo {
+  sha: string;
+  shortSha: string;
+  author: string;
+  email: string;
+  date: string;
+  relativeDate?: string;
+  subject: string;
+  body?: string;
+  filesChanged?: number;
+  additions?: number;
+  deletions?: number;
+}
+

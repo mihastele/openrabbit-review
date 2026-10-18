@@ -1,8 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_OPENRABBIT_CONFIG } from '../config/config-loader.js';
+import {
+  getRepoMetadata,
+  validateGitRepository,
+} from '../core/git-utils.js';
 import { runPullRequestReview } from '../core/review-engine.js';
-import type { ReviewResult } from '../types/index.js';
+import type { LocalRepoInfo, ReviewResult } from '../types/index.js';
 
 export interface SampleDiffTemplate {
   id: string;
@@ -456,7 +460,9 @@ index 0000000..3f4a5b6
 
 export class ReviewStore {
   private filePath: string;
+  private reposFilePath: string;
   private reviews: ReviewResult[] = [];
+  private repositories: LocalRepoInfo[] = [];
   private initialized = false;
 
   constructor(storageDir: string = path.join(process.cwd(), 'data')) {
@@ -464,12 +470,54 @@ export class ReviewStore {
       fs.mkdirSync(storageDir, { recursive: true });
     }
     this.filePath = path.join(storageDir, 'reviews.json');
+    this.reposFilePath = path.join(storageDir, 'repositories.json');
   }
 
   public async init(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
 
+    // Load repositories
+    if (fs.existsSync(this.reposFilePath)) {
+      try {
+        const raw = fs.readFileSync(this.reposFilePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.repositories = parsed;
+        }
+      } catch {
+        this.repositories = [];
+      }
+    }
+
+    // Auto-discover workspace repo if repositories list is empty
+    if (this.repositories.length === 0) {
+      const cwdVal = validateGitRepository(process.cwd());
+      if (cwdVal.valid && cwdVal.topLevel) {
+        try {
+          const meta = getRepoMetadata(cwdVal.topLevel);
+          this.repositories.push(meta);
+          this.persistRepositories();
+        } catch {
+          // Ignore
+        }
+      }
+    }
+
+    // Refresh live repo status
+    for (let i = 0; i < this.repositories.length; i++) {
+      const r = this.repositories[i];
+      if (fs.existsSync(r.path)) {
+        try {
+          const updated = getRepoMetadata(r.path, r.name);
+          this.repositories[i] = { ...updated, addedAt: r.addedAt, id: r.id };
+        } catch {
+          // Keep cached info if git command fails temporarily
+        }
+      }
+    }
+
+    // Load reviews
     if (fs.existsSync(this.filePath)) {
       try {
         const raw = fs.readFileSync(this.filePath, 'utf8');
@@ -506,6 +554,98 @@ export class ReviewStore {
     this.reviews = seeded;
     this.persist();
   }
+
+  // =========================================================================
+  // Repository Management
+  // =========================================================================
+
+  public async listRepositories(): Promise<LocalRepoInfo[]> {
+    await this.init();
+    return this.repositories;
+  }
+
+  public async getRepository(idOrPath: string): Promise<LocalRepoInfo | undefined> {
+    await this.init();
+    const resolvedPath = path.resolve(idOrPath).replace(/\\/g, '/').toLowerCase();
+    return this.repositories.find(
+      (r) =>
+        r.id === idOrPath ||
+        r.path.replace(/\\/g, '/').toLowerCase() === resolvedPath ||
+        r.name.toLowerCase() === idOrPath.toLowerCase()
+    );
+  }
+
+  public async addRepository(repoPath: string, name?: string): Promise<LocalRepoInfo> {
+    await this.init();
+    const validation = validateGitRepository(repoPath);
+    if (!validation.valid || !validation.topLevel) {
+      throw new Error(validation.error || `Invalid git repository path: ${repoPath}`);
+    }
+
+    const resolved = validation.topLevel;
+    const existing = await this.getRepository(resolved);
+    if (existing) {
+      // Update metadata & name
+      const refreshed = getRepoMetadata(resolved, name || existing.name);
+      const updated: LocalRepoInfo = {
+        ...refreshed,
+        id: existing.id,
+        addedAt: existing.addedAt,
+      };
+      const idx = this.repositories.findIndex((r) => r.id === existing.id);
+      this.repositories[idx] = updated;
+      this.persistRepositories();
+      return updated;
+    }
+
+    const meta = getRepoMetadata(resolved, name);
+    this.repositories.unshift(meta);
+    this.persistRepositories();
+    return meta;
+  }
+
+  public async removeRepository(idOrPath: string): Promise<boolean> {
+    await this.init();
+    const target = await this.getRepository(idOrPath);
+    if (!target) return false;
+
+    this.repositories = this.repositories.filter((r) => r.id !== target.id);
+    this.persistRepositories();
+    return true;
+  }
+
+  public async refreshRepository(idOrPath: string): Promise<LocalRepoInfo | undefined> {
+    await this.init();
+    const target = await this.getRepository(idOrPath);
+    if (!target) return undefined;
+
+    const refreshed = getRepoMetadata(target.path, target.name);
+    const updated: LocalRepoInfo = {
+      ...refreshed,
+      id: target.id,
+      addedAt: target.addedAt,
+    };
+    const idx = this.repositories.findIndex((r) => r.id === target.id);
+    this.repositories[idx] = updated;
+    this.persistRepositories();
+    return updated;
+  }
+
+  private persistRepositories(): void {
+    try {
+      fs.writeFileSync(
+        this.reposFilePath,
+        JSON.stringify(this.repositories, null, 2),
+        'utf8'
+      );
+    } catch (err) {
+      console.warn('[OpenRabbit] Failed to persist repositories:', err);
+    }
+  }
+
+  // =========================================================================
+  // Reviews Management
+  // =========================================================================
 
   public async listReviews(): Promise<ReviewResult[]> {
     await this.init();

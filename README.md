@@ -131,6 +131,17 @@ npm run review -- --demo auth-jwt-sqli          # TypeScript (JWT secret leak, S
 # Review your own staged git changes across any repository
 npx tsx src/cli/index.ts review --staged
 
+# Review a specific local repository and commit on your filesystem
+npx openrabbit repo add /path/to/my-repo
+npx openrabbit repo commits /path/to/my-repo
+npx openrabbit review --repo-path /path/to/my-repo --commit <sha>
+npx openrabbit review --repo-path /path/to/my-repo --range HEAD~3..HEAD
+
+# Review live remote PRs on demand (GitHub, GitLab, Bitbucket)
+npx openrabbit review --github owner/repo#123
+npx openrabbit review --gitlab project/id#45
+npx openrabbit review --bitbucket workspace/repo#78
+
 # Ask @openrabbit to generate language-specific unit tests or fixes
 npx tsx src/cli/index.ts chat "@openrabbit generate unit tests"
 npx tsx src/cli/index.ts chat "@openrabbit fix this vulnerability"
@@ -143,10 +154,13 @@ npm run dev
 ```
 
 Then open **`http://localhost:3847`** to explore:
-- **🔎 PR Review Studio**: Paste any `git diff`, switch between curated PR scenarios, inspect the rendered **Mermaid Sequence Diagram**, click **✨ Apply Fix to Diff & Re-Verify** on committable suggestions, and chat with `@openrabbit` inline!
+- **🔎 PR Review Studio**: Paste any `git diff` or select directly from registered local repositories and commits, inspect the rendered **Mermaid Sequence Diagram**, click **✨ Apply Fix to Diff & Re-Verify** on committable suggestions, and chat with `@openrabbit` inline!
+- **📁 Local Repos & Commits**: Connect any git repository on your filesystem, explore commit history with author and file diff stats, and trigger instant one-click reviews for any commit or uncommitted working tree changes.
 - **📊 Reviews & Analytics**: Track PRs reviewed, critical vulnerabilities caught, and engineering hours saved.
 - **⚙️ `.openrabbit.yaml` Studio**: Visually configure `chill` vs `assertive` profiles, `path_instructions`, and BYOK LLM providers.
-- **🔌 Webhook Simulator**: Test GitHub (`pull_request`, `issue_comment`) and GitLab (`Merge Request Hook`) webhooks with one click.
+- **🔌 Webhooks & Integrations**:
+  - **Live On-Demand Review**: Enter any remote PR URL or identifier for GitHub, GitLab, or Bitbucket to review it directly.
+  - **Webhook Simulator**: Test GitHub (`pull_request`, `issue_comment`), GitLab (`Merge Request Hook`), and Bitbucket (`pullrequest:created`, `pullrequest:comment_created`) webhooks with one click.
 
 ---
 

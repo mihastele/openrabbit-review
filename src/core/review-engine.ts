@@ -31,7 +31,7 @@ export interface RunReviewOptions {
   baseBranch?: string;
   headBranch?: string;
   commitSha?: string;
-  source?: 'cli' | 'github' | 'gitlab' | 'playground';
+  source?: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'playground';
   config?: OpenRabbitConfig;
 }
 

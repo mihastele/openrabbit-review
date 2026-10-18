@@ -142,7 +142,7 @@ export function formatWalkthroughMarkdown(
  */
 export function formatInlineCommentMarkdown(
   finding: InlineFinding,
-  platform: 'github' | 'gitlab' = 'github'
+  platform: 'github' | 'gitlab' | 'bitbucket' = 'github'
 ): string {
   const sev = SEVERITY_BADGES[finding.severity] || SEVERITY_BADGES.suggestion;
   const lines: string[] = [];

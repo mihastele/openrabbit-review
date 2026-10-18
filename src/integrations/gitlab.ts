@@ -179,3 +179,69 @@ export async function handleGitLabWebhookEvent(
     postedToGitLab: false,
   };
 }
+
+export async function fetchGitLabCommitDiff(
+  projectId: string | number,
+  commitSha: string,
+  token?: string
+): Promise<string> {
+  const apiUrl = (
+    process.env.GITLAB_API_URL || 'https://gitlab.com/api/v4'
+  ).replace(/\/$/, '');
+  const headers: Record<string, string> = {};
+  if (token) headers['PRIVATE-TOKEN'] = token;
+
+  const res = await fetch(
+    `${apiUrl}/projects/${encodeURIComponent(
+      String(projectId)
+    )}/repository/commits/${encodeURIComponent(commitSha)}/diff`,
+    { headers }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to fetch GitLab commit diff (${res.status})`);
+  }
+  const changes = (await res.json()) as any[];
+  return changes
+    .map(
+      (c) =>
+        `diff --git a/${c.old_path} b/${c.new_path}\n--- a/${c.old_path}\n+++ b/${c.new_path}\n${c.diff}`
+    )
+    .join('\n');
+}
+
+export async function runGitLabOnDemandReview(params: {
+  projectId: string | number;
+  mrIid?: number;
+  commitSha?: string;
+  token?: string;
+  config?: OpenRabbitConfig;
+}): Promise<ReviewResult> {
+  const token = params.token || process.env.GITLAB_TOKEN;
+  let rawDiff = '';
+  let prTitle = `GitLab Review: Project ${params.projectId}`;
+
+  if (params.mrIid) {
+    rawDiff = await fetchGitLabMRDiff(params.projectId, params.mrIid, token);
+    prTitle = `GitLab MR !${params.mrIid} (Project ${params.projectId})`;
+  } else if (params.commitSha) {
+    rawDiff = await fetchGitLabCommitDiff(
+      params.projectId,
+      params.commitSha,
+      token
+    );
+    prTitle = `GitLab Commit ${params.commitSha.slice(0, 7)} (Project ${params.projectId})`;
+  } else {
+    throw new Error('Either mrIid or commitSha is required');
+  }
+
+  return await runPullRequestReview({
+    rawDiff,
+    prTitle,
+    repository: `gitlab/${params.projectId}`,
+    prNumber: params.mrIid,
+    commitSha: params.commitSha,
+    source: 'gitlab',
+    config: params.config || DEFAULT_OPENRABBIT_CONFIG,
+  });
+}
+

@@ -7,14 +7,24 @@ import {
   serializeConfigToYaml,
 } from '../config/config-loader.js';
 import { handlePRChat } from '../core/chat-engine.js';
-import { getLocalGitDiff } from '../core/git-utils.js';
+import {
+  getCommitDiff,
+  getCommitRangeDiff,
+  getLocalGitDiff,
+  getRepoCommits,
+  getRepoMetadata,
+  validateGitRepository,
+} from '../core/git-utils.js';
 import { getProvidersStatus } from '../core/llm-provider.js';
 import { renderEffortBar } from '../core/markdown-formatter.js';
 import { runPullRequestReview } from '../core/review-engine.js';
+import { runBitbucketOnDemandReview } from '../integrations/bitbucket.js';
 import {
   postGitHubInlineReview,
+  runGitHubOnDemandReview,
   upsertGitHubWalkthroughComment,
 } from '../integrations/github.js';
+import { runGitLabOnDemandReview } from '../integrations/gitlab.js';
 import { createOpenRabbitServer } from '../server/app.js';
 import {
   ReviewStore,
@@ -220,11 +230,138 @@ async function runCli(): Promise<void> {
     return;
   }
 
+  if (command === 'repo') {
+    printBanner();
+    const sub = argv[1] || 'list';
+    const store = new ReviewStore();
+    await store.init();
+
+    if (sub === 'list') {
+      const repos = await store.listRepositories();
+      console.log(
+        `${ANSI.bold}Registered Local Repositories (${repos.length}):${ANSI.reset}\n`
+      );
+      if (repos.length === 0) {
+        console.log(
+          `  ${ANSI.dim}No repositories registered yet. Use: openrabbit repo add <path>${ANSI.reset}\n`
+        );
+      } else {
+        for (const r of repos) {
+          const cleanBadge = r.isClean
+            ? `${ANSI.green}✔ Clean${ANSI.reset}`
+            : `${ANSI.yellow}● Uncommitted Changes${ANSI.reset}`;
+          console.log(
+            `  📁 ${ANSI.bold}${ANSI.cyan}${r.name}${ANSI.reset}  ${ANSI.dim}[${r.branch}]${ANSI.reset}  ${cleanBadge}`
+          );
+          console.log(`     Path: ${ANSI.dim}${r.path}${ANSI.reset}`);
+          if (r.lastCommitMessage) {
+            console.log(
+              `     Head: ${ANSI.italic}${r.lastCommitMessage}${ANSI.reset} (${r.lastCommitDate ? new Date(r.lastCommitDate).toLocaleDateString() : ''})`
+            );
+          }
+          console.log('');
+        }
+      }
+      return;
+    }
+
+    if (sub === 'add') {
+      const targetPath = argv[2] || process.cwd();
+      try {
+        const added = await store.addRepository(
+          targetPath,
+          flags.name as string | undefined
+        );
+        console.log(
+          `${ANSI.green}${ANSI.bold}✔ Added local repository:${ANSI.reset} ${ANSI.bold}${added.name}${ANSI.reset}`
+        );
+        console.log(`  Path:   ${ANSI.cyan}${added.path}${ANSI.reset}`);
+        console.log(
+          `  Branch: ${added.branch} (${added.isClean ? 'clean' : 'modified changes'})`
+        );
+        if (added.lastCommitMessage) {
+          console.log(`  Head:   ${added.lastCommitMessage}`);
+        }
+        console.log(
+          `\n  ${ANSI.dim}Review changes:${ANSI.reset} ${ANSI.cyan}openrabbit review --repo-path "${added.path}"${ANSI.reset}`
+        );
+        console.log(
+          `  ${ANSI.dim}View commits:${ANSI.reset}   ${ANSI.cyan}openrabbit repo commits "${added.path}"${ANSI.reset}\n`
+        );
+      } catch (err) {
+        console.error(
+          `${ANSI.red}Failed to add repository:${ANSI.reset}`,
+          (err as Error).message
+        );
+      }
+      return;
+    }
+
+    if (sub === 'remove' || sub === 'rm') {
+      const target = argv[2];
+      if (!target) {
+        console.error(
+          `${ANSI.red}Please specify repository path, name, or ID to remove.${ANSI.reset}`
+        );
+        return;
+      }
+      const removed = await store.removeRepository(target);
+      if (removed) {
+        console.log(`${ANSI.green}✔ Removed repository:${ANSI.reset} ${target}`);
+      } else {
+        console.log(`${ANSI.yellow}Repository not found:${ANSI.reset} ${target}`);
+      }
+      return;
+    }
+
+    if (sub === 'commits' || sub === 'log') {
+      const target = argv[2] || process.cwd();
+      const repo = await store.getRepository(target);
+      const repoPath = repo ? repo.path : path.resolve(target);
+      const max = Number(flags.max || flags.limit || 15);
+
+      try {
+        const commits = getRepoCommits(repoPath, { maxCount: max });
+        const repoName = repo ? repo.name : path.basename(repoPath);
+        console.log(
+          `${ANSI.bold}Recent Commits for ${ANSI.cyan}${repoName}${ANSI.reset} (${commits.length} shown):\n`
+        );
+        for (const c of commits) {
+          console.log(
+            `  ${ANSI.yellow}${c.shortSha}${ANSI.reset} ${ANSI.bold}${c.subject}${ANSI.reset}`
+          );
+          console.log(
+            `    ${ANSI.dim}by ${c.author} · ${c.relativeDate} (${ANSI.green}+${c.additions || 0}${ANSI.reset}/${ANSI.red}-${c.deletions || 0}${ANSI.reset})${ANSI.reset}`
+          );
+        }
+        console.log(
+          `\n  ${ANSI.dim}Review a commit:${ANSI.reset} ${ANSI.cyan}openrabbit review --repo-path "${repoPath}" --commit <sha>${ANSI.reset}\n`
+        );
+      } catch (err) {
+        console.error(
+          `${ANSI.red}Failed to list commits:${ANSI.reset}`,
+          (err as Error).message
+        );
+      }
+      return;
+    }
+  }
+
   if (command === 'review') {
     const format = String(flags.format || 'terminal');
     if (format === 'terminal') printBanner();
 
-    const { config } = loadConfig(process.cwd());
+    const store = new ReviewStore();
+    await store.init();
+
+    // Determine target local repo path
+    let targetRepoPath = process.cwd();
+    if (flags['repo-path'] && typeof flags['repo-path'] === 'string') {
+      const found = await store.getRepository(flags['repo-path']);
+      targetRepoPath = found ? found.path : path.resolve(flags['repo-path']);
+    }
+
+    const { config } = loadConfig(targetRepoPath);
     if (typeof flags.profile === 'string') {
       config.profile = flags.profile as ReviewProfile;
     }
@@ -235,13 +372,166 @@ async function runCli(): Promise<void> {
       config.llm.model = flags.model;
     }
 
+    // 1. Live GitHub on-demand review
+    const ghInput = flags.github || flags['github-url'];
+    if (typeof ghInput === 'string') {
+      let owner = '';
+      let repo = '';
+      let prNumber: number | undefined = undefined;
+      let commitSha: string | undefined = undefined;
+
+      const prUrlMatch = ghInput.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+      const commitUrlMatch = ghInput.match(/github\.com\/([^/]+)\/([^/]+)\/commit\/([a-f0-9]+)/i);
+      const shortPrMatch = ghInput.match(/^([^/]+)\/([^#@]+)#(\d+)$/);
+      const shortCommitMatch = ghInput.match(/^([^/]+)\/([^#@]+)@([a-f0-9]+)$/i);
+
+      if (prUrlMatch) {
+        [, owner, repo] = prUrlMatch;
+        prNumber = Number(prUrlMatch[3]);
+      } else if (commitUrlMatch) {
+        [, owner, repo, commitSha] = commitUrlMatch;
+      } else if (shortPrMatch) {
+        [, owner, repo] = shortPrMatch;
+        prNumber = Number(shortPrMatch[3]);
+      } else if (shortCommitMatch) {
+        [, owner, repo, commitSha] = shortCommitMatch;
+      }
+
+      if (owner && repo) {
+        const ghResult = await runGitHubOnDemandReview({
+          owner,
+          repo,
+          pullNumber: prNumber,
+          commitSha,
+          token: process.env.GITHUB_TOKEN,
+          postComment: Boolean(flags['post-github'] || flags['post-comment']),
+          config,
+        });
+        await store.addReview(ghResult);
+        if (format === 'json') {
+          console.log(JSON.stringify(ghResult, null, 2));
+        } else if (format === 'markdown') {
+          console.log(ghResult.markdownWalkthrough);
+        } else {
+          console.log(renderTerminalReview(ghResult));
+        }
+        return;
+      }
+    }
+
+    // 2. Live GitLab on-demand review
+    const glInput = flags.gitlab || flags['gitlab-url'];
+    if (typeof glInput === 'string') {
+      let projectId: string | number = '';
+      let mrIid: number | undefined = undefined;
+      let commitSha: string | undefined = undefined;
+
+      const mrUrlMatch = glInput.match(/gitlab\.com\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/(\d+)/);
+      const commitUrlMatch = glInput.match(/gitlab\.com\/([^/]+(?:\/[^/]+)+)\/-\/commit\/([a-f0-9]+)/i);
+      const shortMrMatch = glInput.match(/^([^#@]+)#(\d+)$/);
+      const shortCommitMatch = glInput.match(/^([^#@]+)@([a-f0-9]+)$/i);
+
+      if (mrUrlMatch) {
+        projectId = mrUrlMatch[1];
+        mrIid = Number(mrUrlMatch[2]);
+      } else if (commitUrlMatch) {
+        projectId = commitUrlMatch[1];
+        commitSha = commitUrlMatch[2];
+      } else if (shortMrMatch) {
+        projectId = shortMrMatch[1];
+        mrIid = Number(shortMrMatch[2]);
+      } else if (shortCommitMatch) {
+        projectId = shortCommitMatch[1];
+        commitSha = shortCommitMatch[2];
+      }
+
+      if (projectId) {
+        const glResult = await runGitLabOnDemandReview({
+          projectId,
+          mrIid,
+          commitSha,
+          token: process.env.GITLAB_TOKEN,
+          config,
+        });
+        await store.addReview(glResult);
+        if (format === 'json') {
+          console.log(JSON.stringify(glResult, null, 2));
+        } else if (format === 'markdown') {
+          console.log(glResult.markdownWalkthrough);
+        } else {
+          console.log(renderTerminalReview(glResult));
+        }
+        return;
+      }
+    }
+
+    // 3. Live Bitbucket on-demand review
+    const bbInput = flags.bitbucket || flags['bitbucket-url'];
+    if (typeof bbInput === 'string') {
+      let workspace = '';
+      let repoSlug = '';
+      let pullRequestId: number | undefined = undefined;
+      let commitSha: string | undefined = undefined;
+
+      const prUrlMatch = bbInput.match(/bitbucket\.org\/([^/]+)\/([^/]+)\/pull-requests\/(\d+)/);
+      const commitUrlMatch = bbInput.match(/bitbucket\.org\/([^/]+)\/([^/]+)\/commits\/([a-f0-9]+)/i);
+      const shortPrMatch = bbInput.match(/^([^/]+)\/([^#@]+)#(\d+)$/);
+      const shortCommitMatch = bbInput.match(/^([^/]+)\/([^#@]+)@([a-f0-9]+)$/i);
+
+      if (prUrlMatch) {
+        [, workspace, repoSlug] = prUrlMatch;
+        pullRequestId = Number(prUrlMatch[3]);
+      } else if (commitUrlMatch) {
+        [, workspace, repoSlug, commitSha] = commitUrlMatch;
+      } else if (shortPrMatch) {
+        [, workspace, repoSlug] = shortPrMatch;
+        pullRequestId = Number(shortPrMatch[3]);
+      } else if (shortCommitMatch) {
+        [, workspace, repoSlug, commitSha] = shortCommitMatch;
+      }
+
+      if (workspace && repoSlug) {
+        const bbResult = await runBitbucketOnDemandReview({
+          workspace,
+          repoSlug,
+          pullRequestId,
+          commitSha,
+          token: process.env.BITBUCKET_TOKEN,
+          config,
+        });
+        await store.addReview(bbResult);
+        if (format === 'json') {
+          console.log(JSON.stringify(bbResult, null, 2));
+        } else if (format === 'markdown') {
+          console.log(bbResult.markdownWalkthrough);
+        } else {
+          console.log(renderTerminalReview(bbResult));
+        }
+        return;
+      }
+    }
+
     let rawDiff = '';
     let prTitle = String(flags.title || 'Local Pull Request Review');
     let repository = String(flags.repo || 'local/openrabbit');
+    let commitSha: string | undefined = undefined;
 
     if (flags.file && typeof flags.file === 'string') {
       rawDiff = fs.readFileSync(path.resolve(flags.file), 'utf8');
       prTitle = `Patch Review: ${path.basename(flags.file)}`;
+    } else if (flags.commit && typeof flags.commit === 'string') {
+      const commitData = getCommitDiff(targetRepoPath, flags.commit);
+      rawDiff = commitData.diff;
+      commitSha = commitData.commit.sha;
+      prTitle = `Commit ${commitData.commit.shortSha}: ${commitData.commit.subject}`;
+      const repoMeta = getRepoMetadata(targetRepoPath);
+      repository = repoMeta.name;
+    } else if (flags.range && typeof flags.range === 'string') {
+      const rangeData = getCommitRangeDiff(targetRepoPath, flags.range);
+      rawDiff = rangeData.diff;
+      prTitle = rangeData.title;
+      const repoMeta = getRepoMetadata(targetRepoPath);
+      repository = repoMeta.name;
     } else if (flags.demo) {
       const tplId =
         typeof flags.demo === 'string' ? flags.demo : SAMPLE_DIFF_TEMPLATES[0].id;
@@ -253,6 +543,7 @@ async function runCli(): Promise<void> {
       repository = tpl.repository;
     } else {
       const localGit = getLocalGitDiff({
+        cwd: targetRepoPath,
         staged: Boolean(flags.staged),
         baseBranch: typeof flags.base === 'string' ? flags.base : undefined,
       });
@@ -260,6 +551,7 @@ async function runCli(): Promise<void> {
         rawDiff = localGit.diff;
         prTitle = `Local Review: ${localGit.description}`;
         repository = localGit.repoName;
+        commitSha = localGit.commitSha;
       } else {
         // Fallback to demo template 1 if repo has no uncommitted changes yet
         const tpl = SAMPLE_DIFF_TEMPLATES[0];
@@ -274,11 +566,11 @@ async function runCli(): Promise<void> {
       prTitle,
       repository,
       prNumber: flags.pr ? Number(flags.pr) : undefined,
+      commitSha,
       source: 'cli',
       config,
     });
 
-    const store = new ReviewStore();
     await store.addReview(result);
 
     // Optional: post directly to a live GitHub PR if --post-github owner/repo#123 is passed
@@ -359,13 +651,24 @@ async function runCli(): Promise<void> {
   printBanner();
   console.log(`${ANSI.bold}Usage:${ANSI.reset}
   ${ANSI.cyan}openrabbit review${ANSI.reset} [options]       Run AI PR walkthrough & line-by-line review
+    ${ANSI.dim}--repo-path <dir>${ANSI.reset}              Review repository at a specific local path
+    ${ANSI.dim}--commit <sha>${ANSI.reset}                 Review a specific commit in the repository
+    ${ANSI.dim}--range <from..to>${ANSI.reset}             Review a commit range (e.g. main..feat/auth)
     ${ANSI.dim}--staged${ANSI.reset}                        Review staged git changes
     ${ANSI.dim}--base <branch>${ANSI.reset}                 Review branch diff against base (e.g. main)
     ${ANSI.dim}--file <patch>${ANSI.reset}                  Review a specific .diff / .patch file
     ${ANSI.dim}--demo [id]${ANSI.reset}                     Run against a sample PR diff (auth-jwt-sqli | react-billing-hook | clean-stream-worker)
+    ${ANSI.dim}--github <owner/repo#pr>${ANSI.reset}       Review a live GitHub Pull Request or commit
+    ${ANSI.dim}--gitlab <project#mr>${ANSI.reset}          Review a live GitLab Merge Request or commit
+    ${ANSI.dim}--bitbucket <workspace/repo#pr>${ANSI.reset} Review a live Bitbucket Pull Request or commit
     ${ANSI.dim}--profile <mode>${ANSI.reset}                Override profile (chill | assertive | security-focused)
     ${ANSI.dim}--provider <llm>${ANSI.reset}                Override LLM (auto | openai | anthropic | gemini | ollama | heuristic)
     ${ANSI.dim}--format <fmt>${ANSI.reset}                  Output format (terminal | markdown | json)
+
+  ${ANSI.cyan}openrabbit repo list${ANSI.reset}                 List registered local repositories
+  ${ANSI.cyan}openrabbit repo add <path>${ANSI.reset}           Add a repository from local file system
+  ${ANSI.cyan}openrabbit repo remove <path|id>${ANSI.reset}     Remove a registered local repository
+  ${ANSI.cyan}openrabbit repo commits [path]${ANSI.reset}       List recent commits with author & stats
 
   ${ANSI.cyan}openrabbit chat "<query>"${ANSI.reset}          Ask @openrabbit to explain, write unit tests, or fix code
   ${ANSI.cyan}openrabbit serve${ANSI.reset} [--port 3847]    Start Webhook Bot Server & Interactive Web Dashboard

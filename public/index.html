@@ -29,6 +29,9 @@
         <button class="nav-tab active" data-tab="studio" role="tab">
           <span>🔎</span> PR Review Studio
         </button>
+        <button class="nav-tab" data-tab="repos" role="tab">
+          <span>📁</span> Local Repos &amp; Commits
+        </button>
         <button class="nav-tab" data-tab="history" role="tab">
           <span>📊</span> Reviews &amp; Analytics
         </button>
@@ -36,7 +39,7 @@
           <span>⚙️</span> <code>.openrabbit.yaml</code> Studio
         </button>
         <button class="nav-tab" data-tab="webhooks" role="tab">
-          <span>🔌</span> Webhooks &amp; CI Setup
+          <span>🔌</span> Webhooks &amp; Integrations
         </button>
       </nav>
 
@@ -58,8 +61,32 @@
           <div class="card-header">
             <h2>1. Pull Request Diff Source</h2>
             <button class="btn btn-secondary btn-xs" id="btnReviewLocalGit" title="Run git diff on local workspace">
-              📂 Review Local Git Diff
+              📂 Review Local Git
             </button>
+          </div>
+
+          <!-- Quick Local Repository Picker -->
+          <div class="studio-repo-picker-box">
+            <div class="picker-header-row">
+              <label class="field-label">📁 Pick from Local Repository:</label>
+              <a href="#" class="link-subtle" id="linkGoToReposTab">Manage Repos →</a>
+            </div>
+            <div class="form-row-2">
+              <select id="selectStudioRepo" class="input input-sm">
+                <option value="">Select registered repo...</option>
+              </select>
+              <select id="selectStudioCommit" class="input input-sm">
+                <option value="">Select commit...</option>
+              </select>
+            </div>
+            <div style="display: flex; gap: 6px; margin-top: 6px;">
+              <button class="btn btn-secondary btn-xs" id="btnStudioLoadCommit" style="flex: 1;" title="Load commit diff into editor">
+                📄 Load Commit Diff
+              </button>
+              <button class="btn btn-primary btn-xs" id="btnStudioReviewCommit" style="flex: 1;" title="Immediately review this commit">
+                ⚡ Review Commit
+              </button>
+            </div>
           </div>
 
           <div class="template-selector">
@@ -238,7 +265,100 @@
     </main>
 
     <!-- ================================================================== -->
-    <!-- TAB 2: REVIEW HISTORY & TEAM ANALYTICS                             -->
+    <!-- TAB 2: LOCAL REPOSITORIES & COMMITS EXPLORER                         -->
+    <!-- ================================================================== -->
+    <main id="tab-repos" class="tab-panel">
+      <div class="repos-layout">
+        <!-- Add Repository Card -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2>📁 Add Local Repository for Review</h2>
+              <p class="card-subtitle">Connect any git repository on your local filesystem to browse commits, diffs, and launch instant AI reviews.</p>
+            </div>
+            <button class="btn btn-secondary btn-xs" id="btnUseCurrentDir">📂 Use Current Directory</button>
+          </div>
+
+          <div class="form-row-2">
+            <div>
+              <label class="field-label" for="inputRepoPath">Local Repository Directory Path</label>
+              <input type="text" id="inputRepoPath" class="input" placeholder="e.g. D:/development/my-repo or /home/user/project or ." />
+            </div>
+            <div>
+              <label class="field-label" for="inputCustomRepoName">Custom Display Name (Optional)</label>
+              <input type="text" id="inputCustomRepoName" class="input" placeholder="e.g. Main Backend Service" />
+            </div>
+          </div>
+
+          <div style="margin-top: 14px; display: flex; gap: 10px; align-items: center;">
+            <button class="btn btn-primary" id="btnAddRepo">
+              <span>➕</span> Add Repository &amp; Load Commits
+            </button>
+            <span id="addRepoFeedback" class="save-toast hidden"></span>
+          </div>
+        </div>
+
+        <!-- Two Column View: Registered Repos List & Selected Repo Commits -->
+        <div class="repos-grid">
+          <!-- Registered Repositories Card -->
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2>🗂️ Registered Repositories</h2>
+                <span class="mono-hint" id="reposCountHint">0 repositories</span>
+              </div>
+              <button class="btn btn-secondary btn-xs" id="btnRefreshRepos">🔄 Refresh</button>
+            </div>
+            <div id="reposListContainer" class="repos-list-container">
+              <div class="empty-state">Loading registered repositories...</div>
+            </div>
+          </div>
+
+          <!-- Commit History and Review Panel -->
+          <div class="card commit-viewer-card">
+            <div class="card-header">
+              <div>
+                <h2 id="selectedRepoTitle">📜 Commit History</h2>
+                <p class="card-subtitle" id="selectedRepoSub">Select a repository on the left to inspect its commits</p>
+              </div>
+              <div class="commit-header-actions" id="commitHeaderActions" style="display: none; gap: 8px;">
+                <button class="btn btn-secondary btn-xs" id="btnReviewWorkingTree">
+                  <span>⚡</span> Review Working Tree
+                </button>
+                <button class="btn btn-secondary btn-xs" id="btnReviewStaged">
+                  <span>📦</span> Review Staged
+                </button>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="walkthrough-table commits-table">
+                <thead>
+                  <tr>
+                    <th>Commit</th>
+                    <th>Subject</th>
+                    <th>Author</th>
+                    <th>Date</th>
+                    <th>Changes</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="commitsTableBody">
+                  <tr>
+                    <td colspan="6" class="text-center" style="padding: 24px; color: var(--text-muted);">
+                      Select a repository to view its commit history.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ================================================================== -->
+    <!-- TAB 3: REVIEW HISTORY & TEAM ANALYTICS                             -->
     <!-- ================================================================== -->
     <main id="tab-history" class="tab-panel">
       <div class="analytics-kpi-grid" id="analyticsKpiGrid"></div>
@@ -278,7 +398,7 @@
     </main>
 
     <!-- ================================================================== -->
-    <!-- TAB 3: .OPENRABBIT.YAML RULE STUDIO & BYOK LLM CONFIG              -->
+    <!-- TAB 4: .OPENRABBIT.YAML RULE STUDIO & BYOK LLM CONFIG              -->
     <!-- ================================================================== -->
     <main id="tab-rules" class="tab-panel">
       <div class="rules-grid">
@@ -342,15 +462,53 @@
     </main>
 
     <!-- ================================================================== -->
-    <!-- TAB 4: WEBHOOK SIMULATOR & CI/CD INTEGRATION                       -->
+    <!-- TAB 5: WEBHOOK SIMULATOR & CI/CD INTEGRATIONS                      -->
     <!-- ================================================================== -->
     <main id="tab-webhooks" class="tab-panel">
+      <!-- On-Demand Remote PR / Commit Review Card -->
+      <div class="card" style="margin-bottom: 24px;">
+        <div class="card-header">
+          <div>
+            <h2>🌐 Live On-Demand Review (GitHub, GitLab, Bitbucket)</h2>
+            <p class="card-subtitle">Review a remote Pull Request, Merge Request, or Commit directly without configuring webhooks.</p>
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div>
+            <label class="field-label" for="selectIntegrationPlatform">Platform</label>
+            <select id="selectIntegrationPlatform" class="input">
+              <option value="github">GitHub</option>
+              <option value="gitlab">GitLab</option>
+              <option value="bitbucket">Bitbucket</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="inputIntegrationTarget" id="lblIntegrationTarget">PR URL or Target (e.g. owner/repo#123 or https://github.com/...)</label>
+            <input type="text" id="inputIntegrationTarget" class="input" placeholder="e.g. octocat/Hello-World#42 or full PR URL" />
+          </div>
+        </div>
+
+        <div class="form-row-2" style="margin-top: 12px;">
+          <div>
+            <label class="field-label" for="inputIntegrationToken">Access Token (Optional if set in environment)</label>
+            <input type="password" id="inputIntegrationToken" class="input" placeholder="ghp_..., glpat-..., or Bitbucket App Password" />
+          </div>
+          <div style="display: flex; align-items: flex-end;">
+            <button class="btn btn-primary btn-block" id="btnRunIntegrationReview">
+              <span>🐇</span> Fetch &amp; Run OpenRabbit Review
+            </button>
+          </div>
+        </div>
+        <div id="integrationReviewStatus" class="save-toast hidden" style="margin-top: 12px;"></div>
+      </div>
+
       <div class="rules-grid">
         <div class="card">
           <div class="card-header">
             <div>
-              <h2>🚀 Live GitHub &amp; GitLab Webhook Simulator</h2>
-              <p class="card-subtitle">Test <code>/api/webhooks/github</code> and <code>/api/webhooks/gitlab</code> directly from your browser.</p>
+              <h2>🚀 Webhook Simulator (GitHub, GitLab, Bitbucket)</h2>
+              <p class="card-subtitle">Test <code>/api/webhooks/github</code>, <code>/api/webhooks/gitlab</code>, and <code>/api/webhooks/bitbucket</code> directly.</p>
             </div>
           </div>
 
@@ -359,10 +517,13 @@
               🐙 Simulate GitHub <code>pull_request.opened</code>
             </button>
             <button class="btn btn-secondary" id="btnSimGithubChat">
-              💬 Simulate GitHub <code>@openrabbit test</code> Comment
+              💬 Simulate GitHub <code>@openrabbit test</code>
             </button>
             <button class="btn btn-secondary" id="btnSimGitlabMR">
               🦊 Simulate GitLab <code>Merge Request Hook</code>
+            </button>
+            <button class="btn btn-secondary" id="btnSimBitbucketPR">
+              🪣 Simulate Bitbucket <code>pullrequest:created</code>
             </button>
           </div>
 
@@ -374,40 +535,34 @@
 
         <div class="card">
           <div class="card-header">
-            <h2>⚡ GitHub Actions &amp; CLI Quickstart</h2>
+            <h2>⚡ CI/CD &amp; CLI Quickstart</h2>
           </div>
-          <p class="card-subtitle" style="margin-bottom: 10px;">Run OpenRabbit in CI on every Pull Request or locally from your terminal:</p>
-          <pre class="code-preview"># 1. Review local git changes in terminal
-npx openrabbit review
+          <p class="card-subtitle" style="margin-bottom: 10px;">Review local repos or CI pull requests with one command:</p>
+          <pre class="code-preview"># 1. Add and review a local repository
+npx openrabbit repo add /path/to/my-repo
+npx openrabbit repo commits /path/to/my-repo
+npx openrabbit review --repo-path /path/to/my-repo --commit &lt;sha&gt;
 
-# 2. Review a demo PR with full ANSI walkthrough
-npx openrabbit review --demo auth-jwt-sqli
+# 2. Review a remote GitHub PR on demand
+npx openrabbit review --github owner/repo#123
 
-# 3. Ask @openrabbit to generate unit tests
-npx openrabbit chat "@openrabbit generate unit tests"
+# 3. Review a remote GitLab MR on demand
+npx openrabbit review --gitlab project/id#45
 
-# 4. Initialize .openrabbit.yaml in your repository
-npx openrabbit init</pre>
+# 4. Review a remote Bitbucket PR on demand
+npx openrabbit review --bitbucket workspace/repo#78</pre>
 
           <h3 style="margin: 16px 0 8px; font-size: 0.95rem;"><code>.github/workflows/openrabbit.yml</code></h3>
           <pre class="code-preview">name: OpenRabbit AI PR Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  issue_comment:
-    types: [created]
 
 jobs:
   openrabbit-review:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -415,8 +570,7 @@ jobs:
       - run: npx openrabbit review --base origin/${{ github.base_ref }} --post-github ${{ github.repository }}#${{ github.event.pull_request.number }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}</pre>
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}</pre>
         </div>
       </div>
     </main>
