@@ -1,0 +1,21 @@
+services:
+  openrabbit:
+    build: .
+    container_name: openrabbit
+    ports:
+      - "3847:3847"
+    environment:
+      - PORT=3847
+      - OPENRABBIT_LLM_PROVIDER=${OPENRABBIT_LLM_PROVIDER:-auto}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+      - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+      - GITLAB_WEBHOOK_SECRET=${GITLAB_WEBHOOK_SECRET:-}
+    volumes:
+      - ./data:/app/data
+      - ./.openrabbit.yaml:/app/.openrabbit.yaml
+    restart: unless-stopped

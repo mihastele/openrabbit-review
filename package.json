@@ -1,0 +1,45 @@
+{
+  "name": "openrabbit",
+  "version": "1.0.0",
+  "description": "Open-source AI-powered Pull Request reviewer, walkthrough generator, and interactive PR chat bot — an admirable alternative to CodeRabbit.",
+  "type": "module",
+  "bin": {
+    "openrabbit": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/index.ts serve",
+    "start": "node dist/cli/index.js serve",
+    "review": "tsx src/cli/index.ts review",
+    "cli": "tsx src/cli/index.ts",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "keywords": [
+    "code-review",
+    "ai-code-review",
+    "coderabbit",
+    "openrabbit",
+    "github-bot",
+    "gitlab-bot",
+    "pull-request",
+    "llm",
+    "ollama",
+    "openai",
+    "anthropic",
+    "gemini",
+    "static-analysis"
+  ],
+  "author": "OpenRabbit Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

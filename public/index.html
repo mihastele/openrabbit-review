@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenRabbit — Open-Source AI Pull Request Reviewer & Walkthrough Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Navigation Header -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">🐇</div>
+        <div>
+          <div class="brand-title-row">
+            <span class="brand-name">OpenRabbit</span>
+            <span class="version-pill">v1.0.0 OSS</span>
+          </div>
+          <p class="brand-subtitle">AI Pull Request Walkthroughs, Committable Inline Reviews &amp; Interactive <code>@openrabbit</code> Chat</p>
+        </div>
+      </div>
+
+      <nav class="nav-tabs" role="tablist">
+        <button class="nav-tab active" data-tab="studio" role="tab">
+          <span>🔎</span> PR Review Studio
+        </button>
+        <button class="nav-tab" data-tab="history" role="tab">
+          <span>📊</span> Reviews &amp; Analytics
+        </button>
+        <button class="nav-tab" data-tab="rules" role="tab">
+          <span>⚙️</span> <code>.openrabbit.yaml</code> Studio
+        </button>
+        <button class="nav-tab" data-tab="webhooks" role="tab">
+          <span>🔌</span> Webhooks &amp; CI Setup
+        </button>
+      </nav>
+
+      <div class="topbar-status">
+        <div class="engine-badge" id="activeEngineBadge" title="Active Review Engine">
+          <span class="status-dot"></span>
+          <span id="activeEngineText">Loading engine...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ================================================================== -->
+    <!-- TAB 1: LIVE PR REVIEW STUDIO & WALKTHROUGH VIEWER                  -->
+    <!-- ================================================================== -->
+    <main id="tab-studio" class="tab-panel active">
+      <div class="studio-grid">
+        <!-- Left Sidebar: Diff Input & Controls -->
+        <aside class="studio-sidebar card">
+          <div class="card-header">
+            <h2>1. Pull Request Diff Source</h2>
+            <button class="btn btn-secondary btn-xs" id="btnReviewLocalGit" title="Run git diff on local workspace">
+              📂 Review Local Git Diff
+            </button>
+          </div>
+
+          <div class="template-selector">
+            <label class="field-label">Load Sample PR Scenario:</label>
+            <div class="template-pills" id="templatePills"></div>
+          </div>
+
+          <div class="form-row-2">
+            <div>
+              <label class="field-label" for="inputPrTitle">PR Title</label>
+              <input type="text" id="inputPrTitle" class="input" value="feat(auth): add token rotation and admin user lookup endpoint" />
+            </div>
+            <div>
+              <label class="field-label" for="inputRepoName">Repository</label>
+              <input type="text" id="inputRepoName" class="input" value="acme-corp/identity-service" />
+            </div>
+          </div>
+
+          <div class="form-row-2">
+            <div>
+              <label class="field-label" for="selectProfile">Review Profile</label>
+              <select id="selectProfile" class="input">
+                <option value="assertive">🔥 Assertive (Thorough + Nitpicks)</option>
+                <option value="chill">🧊 Chill (High-Signal Only)</option>
+                <option value="security-focused">🛡️ Security-Focused</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="selectProvider">LLM Provider (BYOK)</label>
+              <select id="selectProvider" class="input">
+                <option value="auto">✨ Auto-Detect</option>
+                <option value="heuristic">⚡ OpenRabbit Static + AST</option>
+                <option value="openai">OpenAI (GPT-4o)</option>
+                <option value="anthropic">Anthropic (Claude 3.7)</option>
+                <option value="gemini">Google (Gemini 2.5 Pro)</option>
+                <option value="ollama">Ollama (Local Private)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="diff-editor-wrap">
+            <div class="diff-editor-label-row">
+              <label class="field-label" for="textareaDiff">Unified Git Diff (<code>git diff</code>)</label>
+              <span class="mono-hint" id="diffLineStats">0 lines</span>
+            </div>
+            <textarea id="textareaDiff" class="diff-textarea" spellcheck="false" placeholder="Paste any unified git diff here..."></textarea>
+          </div>
+
+          <button class="btn btn-primary btn-block btn-lg" id="btnRunReview">
+            <span>🐇</span> Run OpenRabbit PR Review
+          </button>
+        </aside>
+
+        <!-- Right Main Area: PR Walkthrough + Line-by-Line Inline Review -->
+        <section class="studio-main">
+          <!-- Review Header Bar -->
+          <div class="review-result-topbar card" id="reviewSummaryBanner">
+            <div class="pr-header-meta">
+              <div class="pr-badge-row">
+                <span class="pr-state-pill">🟢 Open PR</span>
+                <span class="mono-tag" id="viewRepoTag">acme-corp/identity-service #142</span>
+                <span class="mono-tag" id="viewEngineTag">heuristic/openrabbit-ast-v1</span>
+              </div>
+              <h1 id="viewPrTitle" class="pr-main-title">Loading PR Review...</h1>
+            </div>
+            <div class="pr-header-actions">
+              <button class="btn btn-secondary btn-sm" id="btnToggleRawMarkdown">
+                📋 View GitHub Comment Markdown
+              </button>
+            </div>
+          </div>
+
+          <!-- Raw GitHub Markdown Modal/Drawer (Collapsible) -->
+          <div class="card hidden" id="rawMarkdownCard">
+            <div class="card-header">
+              <h3>📄 Exact GitHub / GitLab Sticky Walkthrough Markdown</h3>
+              <button class="btn btn-secondary btn-xs" id="btnCopyMarkdown">Copy Markdown</button>
+            </div>
+            <pre class="code-preview" id="rawMarkdownPre"></pre>
+          </div>
+
+          <!-- Sticky PR Walkthrough Comment Card -->
+          <div class="card walkthrough-card">
+            <div class="comment-author-bar">
+              <div class="bot-avatar">🐇</div>
+              <div>
+                <strong>openrabbit[bot]</strong>
+                <span class="bot-badge">bot</span>
+                <span class="comment-sub">posted sticky PR walkthrough · <code>&lt;!-- openrabbit-walkthrough --&gt;</code></span>
+              </div>
+              <div class="walkthrough-kpis">
+                <div class="kpi-pill" id="kpiEffort">Effort: 3/5</div>
+                <div class="kpi-pill" id="kpiRisk">Risk: CRITICAL</div>
+                <div class="kpi-pill" id="kpiFindings">4 Findings</div>
+              </div>
+            </div>
+
+            <div class="walkthrough-body">
+              <div class="executive-summary" id="viewExecutiveSummary"></div>
+
+              <!-- File Walkthrough Table -->
+              <div class="walkthrough-section">
+                <div class="section-title-row">
+                  <h3>🧭 Detailed File Walkthrough</h3>
+                  <span class="mono-hint" id="viewFileCountHint"></span>
+                </div>
+                <div class="table-wrap">
+                  <table class="walkthrough-table">
+                    <thead>
+                      <tr>
+                        <th>File</th>
+                        <th>Component</th>
+                        <th>Changes</th>
+                        <th>Impact</th>
+                        <th>Walkthrough Summary</th>
+                      </tr>
+                    </thead>
+                    <tbody id="viewFileWalkthroughTable"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Mermaid Diagram & Rabbit Poem Split Row -->
+              <div class="diagram-poem-grid">
+                <div class="walkthrough-section diagram-box">
+                  <h3>🔄 Generated Sequence Diagram</h3>
+                  <div class="mermaid-container" id="mermaidContainer"></div>
+                </div>
+                <div class="walkthrough-section poem-box">
+                  <h3>🥕 OpenRabbit PR Poem</h3>
+                  <blockquote class="rabbit-poem" id="viewPoem"></blockquote>
+                  <div class="security-box hidden" id="viewSecurityBox">
+                    <h4>🛡️ Security Advisories</h4>
+                    <ul id="viewSecurityList"></ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Line-by-Line Diff & Inline Review Threads -->
+          <div class="card diff-review-card">
+            <div class="card-header">
+              <div>
+                <h2>🔎 Line-by-Line Inline Code Review &amp; Committable Suggestions</h2>
+                <p class="card-subtitle">Click <strong>Apply Suggestion to Diff</strong> to patch the code live, or reply with <code>@openrabbit</code> commands in any thread.</p>
+              </div>
+              <div class="severity-legend" id="viewSeverityBreakdown"></div>
+            </div>
+
+            <div id="annotatedDiffContainer" class="annotated-diff-container"></div>
+          </div>
+
+          <!-- Global PR Chat Box (@openrabbit) -->
+          <div class="card pr-chat-card">
+            <div class="card-header">
+              <div>
+                <h2>💬 Interactive PR Chat (<code>@openrabbit</code>)</h2>
+                <p class="card-subtitle">Ask questions about this PR, generate unit tests, or request refactoring patches.</p>
+              </div>
+              <div class="quick-chat-pills">
+                <button class="chip-btn" data-chat="@openrabbit generate unit tests for this PR">🧪 Generate Unit Tests</button>
+                <button class="chip-btn" data-chat="@openrabbit explain the architecture and control flow">🔍 Explain Control Flow</button>
+                <button class="chip-btn" data-chat="@openrabbit fix all security issues">🔧 Suggest Security Fixes</button>
+                <button class="chip-btn" data-chat="@openrabbit docstring">📖 Generate TSDoc</button>
+              </div>
+            </div>
+            <div class="chat-input-row">
+              <input type="text" id="globalChatInput" class="input" placeholder="Comment @openrabbit test, @openrabbit explain, or ask any question about the diff..." />
+              <button class="btn btn-primary" id="btnSendGlobalChat">Ask @openrabbit</button>
+            </div>
+            <div id="globalChatOutput" class="chat-response-box hidden"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ================================================================== -->
+    <!-- TAB 2: REVIEW HISTORY & TEAM ANALYTICS                             -->
+    <!-- ================================================================== -->
+    <main id="tab-history" class="tab-panel">
+      <div class="analytics-kpi-grid" id="analyticsKpiGrid"></div>
+
+      <div class="history-layout">
+        <div class="card">
+          <div class="card-header">
+            <h2>📜 Pull Request Review History</h2>
+            <span class="mono-hint">Click any review to inspect its walkthrough &amp; inline comments</span>
+          </div>
+          <div class="table-wrap">
+            <table class="walkthrough-table">
+              <thead>
+                <tr>
+                  <th>PR / Title</th>
+                  <th>Repository</th>
+                  <th>Source</th>
+                  <th>Engine</th>
+                  <th>Changes</th>
+                  <th>Findings</th>
+                  <th>Risk</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="historyTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>📊 Findings by Category</h2>
+          </div>
+          <div id="categoryChartContainer" class="category-bars"></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ================================================================== -->
+    <!-- TAB 3: .OPENRABBIT.YAML RULE STUDIO & BYOK LLM CONFIG              -->
+    <!-- ================================================================== -->
+    <main id="tab-rules" class="tab-panel">
+      <div class="rules-grid">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2>⚙️ Visual <code>.openrabbit.yaml</code> Configurator</h2>
+              <p class="card-subtitle">Compatible with <code>.openrabbit.yaml</code> and <code>.coderabbit.yaml</code> schemas</p>
+            </div>
+            <button class="btn btn-primary btn-sm" id="btnSaveYamlConfig">💾 Save to .openrabbit.yaml</button>
+          </div>
+
+          <div class="form-row-2">
+            <div>
+              <label class="field-label" for="cfgProfile">Default Review Profile</label>
+              <select id="cfgProfile" class="input">
+                <option value="chill">chill (Suppress nitpicks, focus on bugs)</option>
+                <option value="assertive">assertive (Comprehensive review)</option>
+                <option value="security-focused">security-focused (Strict OWASP/CWE audit)</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="cfgProvider">Default LLM Provider</label>
+              <select id="cfgProvider" class="input">
+                <option value="auto">auto</option>
+                <option value="openai">openai</option>
+                <option value="anthropic">anthropic</option>
+                <option value="gemini">gemini</option>
+                <option value="ollama">ollama</option>
+                <option value="heuristic">heuristic</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="margin-top: 12px;">
+            <label class="field-label" for="cfgTone">Custom Tone &amp; Reviewer Instructions</label>
+            <input type="text" id="cfgTone" class="input" />
+          </div>
+
+          <div class="checkbox-row">
+            <label><input type="checkbox" id="cfgHighLevelSummary" checked /> High-Level Summary</label>
+            <label><input type="checkbox" id="cfgSequenceDiagrams" checked /> Mermaid Sequence Diagrams</label>
+            <label><input type="checkbox" id="cfgPoem" checked /> Rabbit Poem</label>
+            <label><input type="checkbox" id="cfgCollapseWalkthrough" /> Collapse Walkthrough by Default</label>
+          </div>
+
+          <div style="margin-top: 16px;">
+            <label class="field-label" for="textareaYamlConfig">Raw <code>.openrabbit.yaml</code> Configuration</label>
+            <textarea id="textareaYamlConfig" class="diff-textarea" style="height: 310px;" spellcheck="false"></textarea>
+          </div>
+          <div id="configSaveStatus" class="save-toast hidden"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>🔑 Multi-Provider BYOK LLM Status</h2>
+          </div>
+          <div id="providersListContainer" class="providers-list"></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ================================================================== -->
+    <!-- TAB 4: WEBHOOK SIMULATOR & CI/CD INTEGRATION                       -->
+    <!-- ================================================================== -->
+    <main id="tab-webhooks" class="tab-panel">
+      <div class="rules-grid">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2>🚀 Live GitHub &amp; GitLab Webhook Simulator</h2>
+              <p class="card-subtitle">Test <code>/api/webhooks/github</code> and <code>/api/webhooks/gitlab</code> directly from your browser.</p>
+            </div>
+          </div>
+
+          <div class="webhook-sim-buttons">
+            <button class="btn btn-primary" id="btnSimGithubPR">
+              🐙 Simulate GitHub <code>pull_request.opened</code>
+            </button>
+            <button class="btn btn-secondary" id="btnSimGithubChat">
+              💬 Simulate GitHub <code>@openrabbit test</code> Comment
+            </button>
+            <button class="btn btn-secondary" id="btnSimGitlabMR">
+              🦊 Simulate GitLab <code>Merge Request Hook</code>
+            </button>
+          </div>
+
+          <div style="margin-top: 16px;">
+            <label class="field-label">Webhook Dispatch Response:</label>
+            <pre class="code-preview" id="webhookSimResult">Click any button above to dispatch a real HTTP POST to the local webhook receiver...</pre>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>⚡ GitHub Actions &amp; CLI Quickstart</h2>
+          </div>
+          <p class="card-subtitle" style="margin-bottom: 10px;">Run OpenRabbit in CI on every Pull Request or locally from your terminal:</p>
+          <pre class="code-preview"># 1. Review local git changes in terminal
+npx openrabbit review
+
+# 2. Review a demo PR with full ANSI walkthrough
+npx openrabbit review --demo auth-jwt-sqli
+
+# 3. Ask @openrabbit to generate unit tests
+npx openrabbit chat "@openrabbit generate unit tests"
+
+# 4. Initialize .openrabbit.yaml in your repository
+npx openrabbit init</pre>
+
+          <h3 style="margin: 16px 0 8px; font-size: 0.95rem;"><code>.github/workflows/openrabbit.yml</code></h3>
+          <pre class="code-preview">name: OpenRabbit AI PR Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  openrabbit-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx openrabbit review --base origin/${{ github.base_ref }} --post-github ${{ github.repository }}#${{ github.event.pull_request.number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}</pre>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
