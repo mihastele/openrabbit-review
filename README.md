@@ -19,19 +19,25 @@ Code reviews shouldn't require surrendering your proprietary source code to a cl
 2. **📝 Line-by-Line Inline Code Reviews with One-Click Committable Suggestions**:
    - Pinpoints exact diff lines and emits GitHub (` ```suggestion `) and GitLab (` ```suggestion:-0+0 `) committable code blocks.
    - Combines a built-in deterministic **Static + AST Security/Concurrency Analyzer** with **Multi-Provider LLMs**.
-3. **🌐 Practical Multi-Language Support**:
-   - **Python**: Catches mutable default args (`def f(x=[])`), raw f-string SQL injection, `shell=True` subprocesses, bare `except:`, and generates `pytest` test suites with `@pytest.mark.asyncio`.
-   - **Go**: Detects missing `defer resp.Body.Close()`, `fmt.Sprintf` SQL queries, unhandled errors (`_ = ...`), and generates table-driven `go test` suites.
-   - **Rust**: Flags unhandled production `.unwrap()` calls (suggesting `?` or `.unwrap_or_default()`), unannotated `unsafe` blocks, and generates `cargo test` suites.
-   - **Java / Kotlin**: Detects JDBC/JPA raw query concatenation, unclosed resources, and generates JUnit 5 test classes.
-   - **Shell / Bash**: Enforces `set -euo pipefail` strict mode and unquoted expansions.
-   - **TypeScript / JavaScript**: Flags async `.forEach()`, loose equality `==`, uncleaned event/timer leaks, and React hook dependencies.
+3. **🌐 Modular Multi-Language Architecture (Strategy & Factory Patterns)**:
+   - Built on a decoupled **Strategy Pattern** (`ILanguageStrategy`) and **Registry Pattern** (`LanguageRegistry`), isolating all language-specific rules, symbol extraction, test scaffolding, and documentation generators into independent classes:
+     - **C# / .NET** (`.cs`): Detects Entity Framework `FromSqlRaw` / `ExecuteSqlRaw` SQL injection, process-crashing `async void` methods, and thread-pool deadlocks from sync-over-async (`.Result` / `.Wait()`). Generates xUnit `[Fact]` test suites and XML doc comments.
+     - **C++** (`.cpp`, `.cc`, `.cxx`, `.hpp`): Flags unbounded buffer functions (`sprintf`, `strcpy`), raw `new` allocations lacking RAII (`std::make_unique`), and polymorphic object slicing in catch-by-value (`catch (std::exception e)`). Generates GoogleTest (`TEST_F`) suites and Doxygen.
+     - **C** (`.c`, `.h`): Catches unchecked dynamic allocation (`malloc` without NULL check) and unbounded string functions (`strcpy`, `strcat`, `gets`). Generates Unity/CUnit test runners and Doxygen comments.
+     - **Java / Kotlin** (`.java`, `.kt`): Detects JDBC/JPA raw query concatenation, unclosed `AutoCloseable` streams without try-with-resources, and unsafe `Optional.get()`. Generates JUnit 5 test classes and Javadoc.
+     - **PHP** (`.php`): Identifies PDO/MySQLi raw query SQL injection, unescaped superglobal output (Reflected XSS via `$_GET`/`$_POST`), and unescaped `exec()` / `shell_exec()`. Generates PHPUnit test suites and PHPDoc.
+     - **Ruby** (`.rb`, `.rake`): Flags ActiveRecord string interpolation SQL injection (`where("tenant = '#{name}'")`), insecure deserialization (`YAML.load` vs `YAML.safe_load`), and unescaped command execution. Generates RSpec (`RSpec.describe`) specs and YARD docs.
+     - **TypeScript / JavaScript** (`.ts`, `.tsx`, `.js`, `.jsx`): Flags async `.forEach()` race conditions, loose equality `==`, uncleaned event/timer leaks, and React hook dependencies. Generates Vitest/Jest suites and TSDoc.
+     - **Python** (`.py`): Catches mutable default args (`def f(x=[])`), raw f-string SQL injection, `shell=True` subprocesses, and bare `except:`. Generates `pytest` test suites with `@pytest.mark.asyncio` and PEP-257 docstrings.
+     - **Go** (`.go`): Detects missing `defer resp.Body.Close()`, `fmt.Sprintf` SQL queries, and unhandled errors (`_ = ...`). Generates table-driven `go test` suites.
+     - **Rust** (`.rs`): Flags unhandled production `.unwrap()` calls (suggesting `?` or `.unwrap_or_default()`) and unannotated `unsafe` blocks. Generates `cargo test` suites and Rustdoc.
+     - **Shell / Bash** (`.sh`, `.bash`): Enforces `set -euo pipefail` strict mode and flags unquoted expansions.
 4. **💬 Interactive `@openrabbit` PR Chat & Commands**:
    - Reply in any PR or inline review thread with:
      - `@openrabbit explain` — Deep-dive explanation of the hunk & execution flow
-     - `@openrabbit test` — Generates language-specific unit tests (`pytest`, `go test`, `cargo test`, `JUnit`, `Vitest`)
+     - `@openrabbit test` — Generates language-idiomatic unit tests (`pytest`, `go test`, `cargo test`, `JUnit 5`, `xUnit`, `GoogleTest`, `PHPUnit`, `RSpec`, `Vitest`)
      - `@openrabbit fix` — Produces a committable replacement patch matching language idioms
-     - `@openrabbit docstring` — Generates PEP-257 docstrings, Go comments, Rustdoc, or TSDoc
+     - `@openrabbit docstring` — Generates language-standard docstrings (PEP-257, Javadoc, XML Doc, Doxygen, PHPDoc, YARD, TSDoc)
      - `@openrabbit resolve` — Marks the review discussion resolved
 5. **🔑 Multi-Provider BYOK + 100% Private Local Mode**:
    - **OpenAI** (`gpt-4o`, `o3-mini`, or any compatible endpoint like Groq, DeepSeek, OpenRouter)
@@ -44,42 +50,59 @@ Code reviews shouldn't require surrendering your proprietary source code to a cl
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture & Design Patterns
+
+OpenRabbit is engineered with clear separation of concerns using classic GoF design patterns:
+
+- **Strategy Pattern (`ILanguageStrategy`)**: Each programming language implements a standardized strategy defining file extension bindings, symbol extractors, deterministic static AST rules, quick fix generators, and test/doc scaffolds.
+- **Factory / Registry Pattern (`LanguageRegistry`)**: Central singleton registry providing $O(1)$ strategy lookup and file routing. Adding support for a new language requires only implementing `ILanguageStrategy` and registering it—zero core engine modifications needed!
 
 ```mermaid
-flowchart LR
-  subgraph Triggers["Triggers & Sources"]
-    GH["GitHub Webhook / Action"]
-    GL["GitLab MR Webhook"]
-    CLI["OpenRabbit CLI (git diff)"]
-    UI["Interactive Web Studio"]
+flowchart TD
+  subgraph Ingestion["Input & Ingestion"]
+    DIFF["Unified Git Diff / Staged Changes"]
+    CMD["@openrabbit Chat Command"]
   end
 
-  subgraph Core["OpenRabbit Core Engine"]
-    DP["Unified Diff & Symbol Parser"]
-    CFG[".openrabbit.yaml Matcher"]
-    AST["Static & Security AST Rules"]
-    LLM["Multi-Provider LLM Router"]
-    CHAT["@openrabbit Chat Engine"]
+  subgraph Registry["Language Strategy Registry (Factory/Strategy)"]
+    REG["LanguageRegistry.getStrategyForFile()"]
+    CS["CSharpStrategy (.cs)"]
+    CPP["CppStrategy (.cpp, .hpp)"]
+    C["CStrategy (.c, .h)"]
+    JAVA["JavaStrategy (.java, .kt)"]
+    PHP["PhpStrategy (.php)"]
+    RUBY["RubyStrategy (.rb)"]
+    TS["TypeScriptStrategy (.ts, .js)"]
+    PY["PythonStrategy (.py)"]
+    GO["GoStrategy (.go)"]
+    RS["RustStrategy (.rs)"]
+    SH["ShellStrategy (.sh)"]
   end
 
-  subgraph Outputs["Outputs"]
-    WK["Sticky PR Walkthrough + Mermaid Diagram"]
-    INL["Inline Review + Committable Suggestions"]
-    DASH["Analytics & Rule Studio Dashboard"]
+  subgraph Execution["Core Review & Chat Engines"]
+    PARSER["DiffParser (Symbols & Hunks)"]
+    HEURISTIC["HeuristicAnalyzer (Strategy Rules)"]
+    LLM_ROUTER["Multi-Provider LLM Router (BYOK)"]
+    CHAT_ENGINE["PR Chat Engine (Tests/Docs/Fixes)"]
   end
 
-  Triggers --> DP
-  DP --> CFG
-  CFG --> AST
-  CFG --> LLM
-  AST --> WK
-  LLM --> WK
-  AST --> INL
-  LLM --> INL
-  CHAT --> INL
-  WK --> Outputs
-  INL --> Outputs
+  subgraph Delivery["Delivery Outputs"]
+    WALKTHROUGH["Sticky Walkthrough + Mermaid Diagram"]
+    INLINE["Committable Suggestions (GitHub / GitLab)"]
+    DASHBOARD["Interactive Web Studio & Analytics"]
+  end
+
+  DIFF --> PARSER
+  PARSER --> REG
+  REG --> CS & CPP & C & JAVA & PHP & RUBY & TS & PY & GO & RS & SH
+  REG --> HEURISTIC
+  REG --> LLM_ROUTER
+  CMD --> CHAT_ENGINE
+  CHAT_ENGINE --> REG
+
+  HEURISTIC --> WALKTHROUGH & INLINE
+  LLM_ROUTER --> WALKTHROUGH & INLINE
+  WALKTHROUGH & INLINE --> DASHBOARD
 ```
 
 ---
@@ -89,26 +112,28 @@ flowchart LR
 ### 1. Run a Terminal PR Review (`openrabbit review`)
 
 ```bash
-# Install dependencies
+# Install dependencies & build
 npm install
+npm run build
 
-# 1. Review a Python PR (detects mutable defaults, SQL injection, shell=True)
-npm run review -- --demo python-fastapi-sqli
+# Review curated multi-language demos across all supported ecosystems:
+npm run review -- --demo csharp-aspnet-sqli    # C# (.NET Entity Framework SQLi & async void)
+npm run review -- --demo cpp-engine-buffer      # C++ (Unsafe sprintf, raw new, catch-by-value)
+npm run review -- --demo c-crypto-buffer        # C (Unchecked malloc & strcpy)
+npm run review -- --demo java-spring-sqli       # Java (JDBC SQLi & unclosed streams)
+npm run review -- --demo php-laravel-sqli       # PHP (PDO SQLi, XSS echo, exec injection)
+npm run review -- --demo ruby-rails-sqli        # Ruby (ActiveRecord SQLi, YAML.load RCE)
+npm run review -- --demo python-fastapi-sqli    # Python (Mutable defaults, SQLi, shell=True)
+npm run review -- --demo go-microservice-leak   # Go (Missing defer Body.Close, fmt.Sprintf SQL)
+npm run review -- --demo rust-systems-unwrap    # Rust (Production unwrap() panics)
+npm run review -- --demo auth-jwt-sqli          # TypeScript (JWT secret leak, SQLi, async forEach)
 
-# 2. Review a Go PR (detects missing defer resp.Body.Close(), fmt.Sprintf SQL)
-npm run review -- --demo go-microservice-leak
-
-# 3. Review a Rust PR (detects production unwrap() panics)
-npm run review -- --demo rust-systems-unwrap
-
-# 4. Review a TypeScript/Auth PR (detects JWT secret leak, SQLi, async forEach)
-npm run review -- --demo auth-jwt-sqli
-
-# 5. Review your own staged git changes across any language
+# Review your own staged git changes across any repository
 npx tsx src/cli/index.ts review --staged
 
-# 6. Ask @openrabbit to generate language-specific unit tests (pytest / go test / vitest)
+# Ask @openrabbit to generate language-specific unit tests or fixes
 npx tsx src/cli/index.ts chat "@openrabbit generate unit tests"
+npx tsx src/cli/index.ts chat "@openrabbit fix this vulnerability"
 ```
 
 ### 2. Launch the Interactive Web Dashboard & Webhook Server (`openrabbit serve`)

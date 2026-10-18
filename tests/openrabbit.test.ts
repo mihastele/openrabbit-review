@@ -172,6 +172,113 @@ describe('OpenRabbit Core Suite', () => {
       config,
     });
     assert.ok(rustResult.findings.some((f) => f.ruleMatched === 'rust-raw-unwrap'));
+
+    // 4. C# Review
+    const csTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'csharp-aspnet-sqli')!;
+    const csResult = await runPullRequestReview({
+      rawDiff: csTemplate.diff,
+      prTitle: csTemplate.prTitle,
+      repository: csTemplate.repository,
+      config,
+    });
+    assert.ok(csResult.findings.some((f) => f.ruleMatched === 'cs-sql-injection'));
+    assert.ok(csResult.findings.some((f) => f.ruleMatched === 'cs-async-void'));
+
+    // 5. C++ Review
+    const cppTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'cpp-engine-buffer')!;
+    const cppResult = await runPullRequestReview({
+      rawDiff: cppTemplate.diff,
+      prTitle: cppTemplate.prTitle,
+      repository: cppTemplate.repository,
+      config,
+    });
+    assert.ok(cppResult.findings.some((f) => f.ruleMatched === 'cpp-raw-pointer-new'));
+    assert.ok(cppResult.findings.some((f) => f.ruleMatched === 'cpp-unsafe-string-function'));
+    assert.ok(cppResult.findings.some((f) => f.ruleMatched === 'cpp-catch-by-value'));
+
+    // 6. C Review
+    const cTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'c-crypto-buffer')!;
+    const cResult = await runPullRequestReview({
+      rawDiff: cTemplate.diff,
+      prTitle: cTemplate.prTitle,
+      repository: cTemplate.repository,
+      config,
+    });
+    assert.ok(cResult.findings.some((f) => f.ruleMatched === 'c-unsafe-buffer-function'));
+    assert.ok(cResult.findings.some((f) => f.ruleMatched === 'c-unchecked-malloc-allocation'));
+
+    // 7. Java Review
+    const javaTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'java-spring-sqli')!;
+    const javaResult = await runPullRequestReview({
+      rawDiff: javaTemplate.diff,
+      prTitle: javaTemplate.prTitle,
+      repository: javaTemplate.repository,
+      config,
+    });
+    assert.ok(javaResult.findings.some((f) => f.ruleMatched === 'java-sql-injection'));
+    assert.ok(javaResult.findings.some((f) => f.ruleMatched === 'java-unclosed-stream-connection'));
+
+    // 8. PHP Review
+    const phpTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'php-laravel-sqli')!;
+    const phpResult = await runPullRequestReview({
+      rawDiff: phpTemplate.diff,
+      prTitle: phpTemplate.prTitle,
+      repository: phpTemplate.repository,
+      config,
+    });
+    assert.ok(phpResult.findings.some((f) => f.ruleMatched === 'php-sql-injection'));
+    assert.ok(phpResult.findings.some((f) => f.ruleMatched === 'php-xss-direct-echo'));
+
+    // 9. Ruby Review
+    const rubyTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'ruby-rails-sqli')!;
+    const rubyResult = await runPullRequestReview({
+      rawDiff: rubyTemplate.diff,
+      prTitle: rubyTemplate.prTitle,
+      repository: rubyTemplate.repository,
+      config,
+    });
+    assert.ok(rubyResult.findings.some((f) => f.ruleMatched === 'ruby-sql-injection'));
+    assert.ok(rubyResult.findings.some((f) => f.ruleMatched === 'ruby-insecure-yaml-deserialization'));
+  });
+
+  it('generates language-idiomatic tests for C#, C++, Java, PHP, and Ruby via @openrabbit test', async () => {
+    // C# xUnit test generation
+    const csReply = await handlePRChat({
+      query: '@openrabbit test',
+      file: 'src/Services/OrderService.cs',
+    });
+    assert.ok(csReply.replyMarkdown.includes('Xunit'));
+    assert.ok(csReply.replyMarkdown.includes('[Fact]'));
+
+    // C++ GTest generation
+    const cppReply = await handlePRChat({
+      query: '@openrabbit test',
+      file: 'src/network/packet_decoder.cpp',
+    });
+    assert.ok(cppReply.replyMarkdown.includes('gtest/gtest.h'));
+    assert.ok(cppReply.replyMarkdown.includes('TEST_F'));
+
+    // Java JUnit 5 test generation
+    const javaReply = await handlePRChat({
+      query: '@openrabbit test',
+      file: 'src/main/java/com/acme/OrderService.java',
+    });
+    assert.ok(javaReply.replyMarkdown.includes('org.junit.jupiter.api.Test'));
+    assert.ok(javaReply.replyMarkdown.includes('@Test'));
+
+    // PHP PHPUnit test generation
+    const phpReply = await handlePRChat({
+      query: '@openrabbit test',
+      file: 'app/Controllers/ProductController.php',
+    });
+    assert.ok(phpReply.replyMarkdown.includes('PHPUnit\\Framework\\TestCase'));
+
+    // Ruby RSpec test generation
+    const rubyReply = await handlePRChat({
+      query: '@openrabbit test',
+      file: 'app/models/account.rb',
+    });
+    assert.ok(rubyReply.replyMarkdown.includes('RSpec.describe'));
   });
 
   it('verifies GitHub HMAC-SHA256 webhook signatures', () => {

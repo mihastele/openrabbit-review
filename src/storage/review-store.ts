@@ -238,6 +238,220 @@ index 0000000..3e2d1c0
 +}
 `,
   },
+  {
+    id: 'csharp-aspnet-sqli',
+    name: 'C#: Entity Framework Query & Async Void',
+    prTitle: 'feat(orders): add customer order repository and cache synchronization',
+    repository: 'acme-corp/orders-api',
+    prNumber: 412,
+    author: 'david-net',
+    description:
+      'C# PR with FromSqlRaw string interpolation injection and async void method.',
+    diff: `diff --git a/src/Repositories/OrderRepository.cs b/src/Repositories/OrderRepository.cs
+new file mode 100644
+index 0000000..8a9b0c1
+--- /dev/null
++++ b/src/Repositories/OrderRepository.cs
+@@ -0,0 +1,24 @@
++using System;
++using System.Threading.Tasks;
++using Microsoft.EntityFrameworkCore;
++
++namespace Acme.Repositories;
++
++public class OrderRepository
++{
++    private readonly DbContext _context;
++
++    public async Task<Order> GetOrderAsync(string customerId)
++    {
++        // SQL Injection via string interpolation in FromSqlRaw
++        var query = $"SELECT * FROM Orders WHERE CustomerId = '{customerId}'";
++        return await _context.Orders.FromSqlRaw(query).FirstOrDefaultAsync();
++    }
++
++    public async void SyncOrderCache(string orderId)
++    {
++        // async void crash risk
++        await Task.Delay(100);
++    }
++}
+`,
+  },
+  {
+    id: 'cpp-engine-buffer',
+    name: 'C++: Network Buffer Decoder & Session Manager',
+    prTitle: 'feat(network): packet decoder and session buffer allocator',
+    repository: 'acme-corp/engine-core',
+    prNumber: 450,
+    author: 'alex-cpp',
+    description:
+      'C++ PR with raw new allocations, unsafe sprintf string operations, and catch-by-value.',
+    diff: `diff --git a/src/network/packet_decoder.cpp b/src/network/packet_decoder.cpp
+new file mode 100644
+index 0000000..9b0c1d2
+--- /dev/null
++++ b/src/network/packet_decoder.cpp
+@@ -0,0 +1,25 @@
++#include <cstdio>
++#include <stdexcept>
++#include <string>
++
++class PacketDecoder {
++public:
++    void decode_packet(const char* packet_id) {
++        char buffer[64];
++        // Unsafe sprintf buffer overflow
++        sprintf(buffer, "packet_%s_decoded", packet_id);
++
++        // Raw new without smart pointer
++        char* raw_session = new char[1024];
++
++        try {
++            process_buffer(buffer);
++        } catch (std::exception e) {
++            // Object slicing catch-by-value
++        }
++    }
++private:
++    void process_buffer(const char* buf) {}
++};
+`,
+  },
+  {
+    id: 'c-crypto-buffer',
+    name: 'C: Token Parser & Dynamic Allocator',
+    prTitle: 'feat(crypto): token parser and memory allocator',
+    repository: 'acme-corp/crypto-native',
+    prNumber: 489,
+    author: 'dennis-c',
+    description:
+      'C PR with unsafe strcpy and unchecked malloc allocation.',
+    diff: `diff --git a/src/token_parser.c b/src/token_parser.c
+new file mode 100644
+index 0000000..1d2e3f4
+--- /dev/null
++++ b/src/token_parser.c
+@@ -0,0 +1,20 @@
++#include <stdlib.h>
++#include <string.h>
++
++char* parse_auth_token(const char* raw_token) {
++    // Unchecked malloc allocation
++    char* token_buf = (char*)malloc(128);
++
++    // Unbounded strcpy
++    strcpy(token_buf, raw_token);
++
++    return token_buf;
++}
+`,
+  },
+  {
+    id: 'java-spring-sqli',
+    name: 'Java: Billing Service & Raw JDBC Query',
+    prTitle: 'feat(billing): invoice query and audit stream processing',
+    repository: 'acme-corp/billing-service',
+    prNumber: 504,
+    author: 'james-java',
+    description:
+      'Java PR with raw JDBC SQL concatenation and unclosed FileInputStream.',
+    diff: `diff --git a/src/main/java/com/acme/billing/InvoiceService.java b/src/main/java/com/acme/billing/InvoiceService.java
+new file mode 100644
+index 0000000..4b5c6d7
+--- /dev/null
++++ b/src/main/java/com/acme/billing/InvoiceService.java
+@@ -0,0 +1,24 @@
++package com.acme.billing;
++
++import java.io.FileInputStream;
++import java.sql.Connection;
++import java.sql.ResultSet;
++import java.sql.Statement;
++
++public class InvoiceService {
++    public void findInvoices(Connection conn, String accountId) throws Exception {
++        Statement stmt = conn.createStatement();
++        // SQL Injection via string concatenation
++        ResultSet rs = stmt.executeQuery("SELECT * FROM invoices WHERE account_id = '" + accountId + "'");
++    }
++
++    public void loadAuditLog(String path) throws Exception {
++        // Unclosed stream without try-with-resources
++        FileInputStream fis = new FileInputStream(path);
++        fis.read();
++    }
++}
++`,
+  },
+  {
+    id: 'php-laravel-sqli',
+    name: 'PHP: Product Search Controller & Shell Exporter',
+    prTitle: 'feat(catalog): product search controller and shell exporter',
+    repository: 'acme-corp/shop-backend',
+    prNumber: 521,
+    author: 'rasmus-php',
+    description:
+      'PHP PR with PDO query SQL injection, unescaped superglobal echo (XSS), and unescaped exec.',
+    diff: `diff --git a/app/Controllers/ProductController.php b/app/Controllers/ProductController.php
+new file mode 100644
+index 0000000..2e3f4a5
+--- /dev/null
++++ b/app/Controllers/ProductController.php
+@@ -0,0 +1,24 @@
++<?php
++
++namespace App\\Controllers;
++
++class ProductController {
++    public function searchProducts($pdo, $category) {
++        // Direct string interpolation in PDO query
++        $stmt = $pdo->query("SELECT * FROM products WHERE category = '" . $category . "'");
++        return $stmt->fetchAll();
++    }
++
++    public function exportCatalog($outputName) {
++        // Unescaped command execution
++        exec("tar -czf " . $outputName . " /var/data/catalog");
++    }
++
++    public function renderHeader() {
++        // Direct superglobal echo (XSS)
++        echo "<h1>Search: " . $_GET['q'] . "</h1>";
++    }
++}
+`,
+  },
+  {
+    id: 'ruby-rails-sqli',
+    name: 'Ruby: Account Lookup & Insecure YAML',
+    prTitle: 'feat(accounts): tenant account query and YAML settings loader',
+    repository: 'acme-corp/saas-platform',
+    prNumber: 563,
+    author: 'matz-rb',
+    description:
+      'Ruby PR with ActiveRecord SQL injection and insecure YAML.load.',
+    diff: `diff --git a/app/models/account_finder.rb b/app/models/account_finder.rb
+new file mode 100644
+index 0000000..3f4a5b6
+--- /dev/null
++++ b/app/models/account_finder.rb
+@@ -0,0 +1,18 @@
++require 'yaml'
++
++class AccountFinder
++  def self.find_by_tenant(tenant_name)
++    # ActiveRecord SQL injection via interpolation
++    Account.where("tenant_name = '#{tenant_name}'")
++  end
++
++  def self.load_custom_config(raw_yaml)
++    # Insecure deserialization
++    YAML.load(raw_yaml)
++  end
++end
+`,
+  },
 ];
 
 export class ReviewStore {

@@ -1,5 +1,478 @@
 [
   {
+    "id": "rev-ca80a2f3",
+    "createdAt": "2026-10-18T14:46:57.207Z",
+    "source": "cli",
+    "repository": "acme-corp/saas-platform",
+    "prTitle": "feat(accounts): tenant account query and YAML settings loader",
+    "author": "developer",
+    "baseBranch": "main",
+    "headBranch": "feat/branch",
+    "commitSha": "c12531b9",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 13,
+      "deletions": 0,
+      "findingsCount": 2,
+      "criticalCount": 2,
+      "warningCount": 0,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 0
+    },
+    "walkthrough": {
+      "title": "feat(accounts): tenant account query and YAML settings loader",
+      "executiveSummary": "This pull request modifies **1 file** across **App** (+13/-0 lines). OpenRabbit identified **2 critical issue(s)** and **0 warning(s)** that should be addressed prior to merge.",
+      "releaseNotes": [
+        {
+          "category": "New Features & Modules",
+          "items": [
+            "App: Introduces new Ruby module defining `AccountFinder`, `self` (+13 lines)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": "app/models/account_finder.rb",
+          "status": "added",
+          "additions": 13,
+          "deletions": 0,
+          "component": "App",
+          "summary": "Introduces new Ruby module defining `AccountFinder`, `self` (+13 lines).",
+          "impact": "high"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_account_finder_rb as account_finder.rb\n  Caller->>+M0_account_finder_rb: Invoke AccountFinder()\n  M0_account_finder_rb-->>-Caller: Return result",
+      "poem": "A twitch of the ear at `account_finder.rb` in flight,\nGreen lines of ambition, bold changes in sight—\nYet traps in the burrow lurk under the clover,\nLet's patch up the hazards before hopping over! 🐇🛡️",
+      "effortScore": 5,
+      "estimatedMinutes": 5,
+      "riskLevel": "critical",
+      "securityConcerns": [
+        "app/models/account_finder.rb:L6 — ActiveRecord SQL Injection via string interpolation in query",
+        "app/models/account_finder.rb:L11 — Insecure `YAML.load` enables Remote Code Execution (CWE-502)"
+      ]
+    },
+    "findings": [
+      {
+        "id": "finding-dad2b5b9",
+        "file": "app/models/account_finder.rb",
+        "startLine": 6,
+        "endLine": 6,
+        "severity": "critical",
+        "category": "security",
+        "title": "ActiveRecord SQL Injection via string interpolation in query",
+        "body": "Interpolating strings directly into ActiveRecord query methods creates a **SQL Injection (CWE-89)** vulnerability. Use parameterized placeholders (`where(\"id = ?\", id)`) or hash conditions (`where(id: id)`).",
+        "suggestionCode": "    Account.where(\"tenant_name = '?\", tenant_name\")",
+        "originalCode": "    Account.where(\"tenant_name = '#{tenant_name}'\")",
+        "ruleMatched": "ruby-sql-injection"
+      },
+      {
+        "id": "finding-1a36b2e5",
+        "file": "app/models/account_finder.rb",
+        "startLine": 11,
+        "endLine": 11,
+        "severity": "critical",
+        "category": "security",
+        "title": "Insecure `YAML.load` enables Remote Code Execution (CWE-502)",
+        "body": "Calling `YAML.load` on untrusted input allows arbitrary Ruby object instantiation and remote code execution (**CWE-502**). Use `YAML.safe_load(str, permitted_classes: [...])` instead.",
+        "suggestionCode": "    YAML.safe_load(raw_yaml)",
+        "originalCode": "    YAML.load(raw_yaml)",
+        "ruleMatched": "ruby-insecure-yaml-deserialization"
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **App** (+13/-0 lines). OpenRabbit identified **2 critical issue(s)** and **0 warning(s)** that should be addressed prior to merge.\n\n### 📋 Summary by OpenRabbit\n- **New Features & Modules**\n  - App: Introduces new Ruby module defining `AccountFinder`, `self` (+13 lines).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦🟦🟦🟦 (5/5) (~5 min) |\n| **Risk Assessment** | **CRITICAL** (2 critical, 0 warnings) |\n| **Actionable Comments** | **2** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `app/models/account_finder.rb` | App | `+13/-0` | 🔴 High | Introduces new Ruby module defining `AccountFinder`, `self` (+13 lines). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_account_finder_rb as account_finder.rb\n  Caller->>+M0_account_finder_rb: Invoke AccountFinder()\n  M0_account_finder_rb-->>-Caller: Return result\n```\n\n</details>\n\n> [!WARNING]\n> **Security Advisories Detected**\n> - app/models/account_finder.rb:L6 — ActiveRecord SQL Injection via string interpolation in query\n> - app/models/account_finder.rb:L11 — Insecure `YAML.load` enables Remote Code Execution (CWE-502)\n\n### 🥕 Poem\n> A twitch of the ear at `account_finder.rb` in flight,\n> Green lines of ambition, bold changes in sight—\n> Yet traps in the burrow lurk under the clover,\n> Let's patch up the hazards before hopping over! 🐇🛡️\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/app/models/account_finder.rb b/app/models/account_finder.rb\nnew file mode 100644\nindex 0000000..3f4a5b6\n--- /dev/null\n+++ b/app/models/account_finder.rb\n@@ -0,0 +1,18 @@\n+require 'yaml'\n+\n+class AccountFinder\n+  def self.find_by_tenant(tenant_name)\n+    # ActiveRecord SQL injection via interpolation\n+    Account.where(\"tenant_name = '#{tenant_name}'\")\n+  end\n+\n+  def self.load_custom_config(raw_yaml)\n+    # Insecure deserialization\n+    YAML.load(raw_yaml)\n+  end\n+end\n"
+  },
+  {
+    "id": "rev-1db33c88",
+    "createdAt": "2026-10-18T14:46:51.304Z",
+    "source": "cli",
+    "repository": "acme-corp/shop-backend",
+    "prTitle": "feat(catalog): product search controller and shell exporter",
+    "author": "developer",
+    "baseBranch": "main",
+    "headBranch": "feat/branch",
+    "commitSha": "65a04613",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 21,
+      "deletions": 0,
+      "findingsCount": 3,
+      "criticalCount": 3,
+      "warningCount": 0,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 0
+    },
+    "walkthrough": {
+      "title": "feat(catalog): product search controller and shell exporter",
+      "executiveSummary": "This pull request modifies **1 file** across **App** (+21/-0 lines). OpenRabbit identified **3 critical issue(s)** and **0 warning(s)** that should be addressed prior to merge.",
+      "releaseNotes": [
+        {
+          "category": "New Features & Modules",
+          "items": [
+            "App: Introduces new PHP module defining `ProductController`, `searchProducts`, `exportCatalog`, `renderHeader`, `echo` (+21 lines)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": "app/Controllers/ProductController.php",
+          "status": "added",
+          "additions": 21,
+          "deletions": 0,
+          "component": "App",
+          "summary": "Introduces new PHP module defining `ProductController`, `searchProducts`, `exportCatalog`, `renderHeader`, `echo` (+21 lines).",
+          "impact": "high"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_ProductController_php as ProductController.php\n  Caller->>+M0_ProductController_php: Invoke ProductController()\n  M0_ProductController_php-->>-Caller: Return result",
+      "poem": "A twitch of the ear at `ProductController.php` in flight,\nGreen lines of ambition, bold changes in sight—\nYet traps in the burrow lurk under the clover,\nLet's patch up the hazards before hopping over! 🐇🛡️",
+      "effortScore": 5,
+      "estimatedMinutes": 8,
+      "riskLevel": "critical",
+      "securityConcerns": [
+        "app/Controllers/ProductController.php:L8 — PHP SQL Injection via string interpolation or concatenation",
+        "app/Controllers/ProductController.php:L14 — Unescaped shell execution vulnerable to Command Injection (CWE-78)",
+        "app/Controllers/ProductController.php:L19 — Direct output of superglobal input causes Cross-Site Scripting (XSS)"
+      ]
+    },
+    "findings": [
+      {
+        "id": "finding-f713c64d",
+        "file": "app/Controllers/ProductController.php",
+        "startLine": 8,
+        "endLine": 8,
+        "severity": "critical",
+        "category": "security",
+        "title": "PHP SQL Injection via string interpolation or concatenation",
+        "body": "Interpolating or concatenating variables directly into PDO or MySQLi queries causes **SQL Injection (CWE-89)**. Prepare the statement with placeholders (`$stmt = $pdo->prepare(...)`) and bind variables via `$stmt->execute([...])`.",
+        "suggestionCode": "        $stmt = $pdo->prepare(\"SELECT ... WHERE id = :id\");\n        $stmt->execute(['id' => $id]);",
+        "originalCode": "        $stmt = $pdo->query(\"SELECT * FROM products WHERE category = '\" . $category . \"'\");",
+        "ruleMatched": "php-sql-injection"
+      },
+      {
+        "id": "finding-fc62ab1d",
+        "file": "app/Controllers/ProductController.php",
+        "startLine": 14,
+        "endLine": 14,
+        "severity": "critical",
+        "category": "security",
+        "title": "Unescaped shell execution vulnerable to Command Injection (CWE-78)",
+        "body": "Executing shell commands with unsanitized PHP variables allows arbitrary **Command Injection (CWE-78)**. Sanitize arguments using `escapeshellarg()` or use a dedicated process library like Symfony `Process`.",
+        "suggestionCode": "        $safeArg = escapeshellarg($input);\n        exec(\"tar -czf \" . escapeshellarg($outputName) . \" /var/data/catalog\");",
+        "originalCode": "        exec(\"tar -czf \" . $outputName . \" /var/data/catalog\");",
+        "ruleMatched": "php-command-injection"
+      },
+      {
+        "id": "finding-e365394c",
+        "file": "app/Controllers/ProductController.php",
+        "startLine": 19,
+        "endLine": 19,
+        "severity": "critical",
+        "category": "security",
+        "title": "Direct output of superglobal input causes Cross-Site Scripting (XSS)",
+        "body": "Echoing user-supplied superglobals (`$_GET`, `$_POST`) directly into the HTML response causes **Reflected Cross-Site Scripting (CWE-79)**. Wrap output in `htmlspecialchars($val, ENT_QUOTES, \"UTF-8\")`.",
+        "suggestionCode": "        echo \"<h1>Search: \" . $_GET['q'] . \"</h1>\";",
+        "originalCode": "        echo \"<h1>Search: \" . $_GET['q'] . \"</h1>\";",
+        "ruleMatched": "php-xss-direct-echo"
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **App** (+21/-0 lines). OpenRabbit identified **3 critical issue(s)** and **0 warning(s)** that should be addressed prior to merge.\n\n### 📋 Summary by OpenRabbit\n- **New Features & Modules**\n  - App: Introduces new PHP module defining `ProductController`, `searchProducts`, `exportCatalog`, `renderHeader`, `echo` (+21 lines).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦🟦🟦🟦 (5/5) (~8 min) |\n| **Risk Assessment** | **CRITICAL** (3 critical, 0 warnings) |\n| **Actionable Comments** | **3** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `app/Controllers/ProductController.php` | App | `+21/-0` | 🔴 High | Introduces new PHP module defining `ProductController`, `searchProducts`, `exportCatalog`, `renderHeader`, `echo` (+21 lines). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_ProductController_php as ProductController.php\n  Caller->>+M0_ProductController_php: Invoke ProductController()\n  M0_ProductController_php-->>-Caller: Return result\n```\n\n</details>\n\n> [!WARNING]\n> **Security Advisories Detected**\n> - app/Controllers/ProductController.php:L8 — PHP SQL Injection via string interpolation or concatenation\n> - app/Controllers/ProductController.php:L14 — Unescaped shell execution vulnerable to Command Injection (CWE-78)\n> - app/Controllers/ProductController.php:L19 — Direct output of superglobal input causes Cross-Site Scripting (XSS)\n\n### 🥕 Poem\n> A twitch of the ear at `ProductController.php` in flight,\n> Green lines of ambition, bold changes in sight—\n> Yet traps in the burrow lurk under the clover,\n> Let's patch up the hazards before hopping over! 🐇🛡️\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/app/Controllers/ProductController.php b/app/Controllers/ProductController.php\nnew file mode 100644\nindex 0000000..2e3f4a5\n--- /dev/null\n+++ b/app/Controllers/ProductController.php\n@@ -0,0 +1,24 @@\n+<?php\n+\n+namespace App\\Controllers;\n+\n+class ProductController {\n+    public function searchProducts($pdo, $category) {\n+        // Direct string interpolation in PDO query\n+        $stmt = $pdo->query(\"SELECT * FROM products WHERE category = '\" . $category . \"'\");\n+        return $stmt->fetchAll();\n+    }\n+\n+    public function exportCatalog($outputName) {\n+        // Unescaped command execution\n+        exec(\"tar -czf \" . $outputName . \" /var/data/catalog\");\n+    }\n+\n+    public function renderHeader() {\n+        // Direct superglobal echo (XSS)\n+        echo \"<h1>Search: \" . $_GET['q'] . \"</h1>\";\n+    }\n+}\n"
+  },
+  {
+    "id": "rev-cab31e17",
+    "createdAt": "2026-10-18T14:46:45.422Z",
+    "source": "cli",
+    "repository": "acme-corp/billing-service",
+    "prTitle": "feat(billing): invoice query and audit stream processing",
+    "author": "developer",
+    "baseBranch": "main",
+    "headBranch": "feat/branch",
+    "commitSha": "f3f12159",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 21,
+      "deletions": 0,
+      "findingsCount": 3,
+      "criticalCount": 2,
+      "warningCount": 1,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 0
+    },
+    "walkthrough": {
+      "title": "feat(billing): invoice query and audit stream processing",
+      "executiveSummary": "This pull request modifies **1 file** across **Main** (+21/-0 lines). OpenRabbit identified **2 critical issue(s)** and **1 warning(s)** that should be addressed prior to merge.",
+      "releaseNotes": [
+        {
+          "category": "New Features & Modules",
+          "items": [
+            "Main: Introduces new Java module defining `InvoiceService`, `findInvoices`, `loadAuditLog`, `FileInputStream` (+21 lines)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": "src/main/java/com/acme/billing/InvoiceService.java",
+          "status": "added",
+          "additions": 21,
+          "deletions": 0,
+          "component": "Main",
+          "summary": "Introduces new Java module defining `InvoiceService`, `findInvoices`, `loadAuditLog`, `FileInputStream` (+21 lines).",
+          "impact": "high"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_InvoiceService_java as InvoiceService.java\n  Caller->>+M0_InvoiceService_java: Invoke InvoiceService()\n  M0_InvoiceService_java-->>-Caller: Return result",
+      "poem": "A twitch of the ear at `InvoiceService.java` in flight,\nGreen lines of ambition, bold changes in sight—\nYet traps in the burrow lurk under the clover,\nLet's patch up the hazards before hopping over! 🐇🛡️",
+      "effortScore": 5,
+      "estimatedMinutes": 8,
+      "riskLevel": "critical",
+      "securityConcerns": [
+        "src/main/java/com/acme/billing/InvoiceService.java:L12 — Potential SQL Injection via string interpolation",
+        "src/main/java/com/acme/billing/InvoiceService.java:L12 — Java SQL Injection via string concatenation in raw query"
+      ]
+    },
+    "findings": [
+      {
+        "id": "finding-95bf3ff3",
+        "file": "src/main/java/com/acme/billing/InvoiceService.java",
+        "startLine": 12,
+        "endLine": 12,
+        "severity": "critical",
+        "category": "security",
+        "title": "Potential SQL Injection via string interpolation",
+        "body": "Interpolating user-controlled values directly into a raw SQL query exposes the database to **SQL Injection (CWE-89)**. Use parameterized queries or prepared statements with bound placeholders (`$1`, `?`) instead.",
+        "suggestionCode": "        // Use parameterized query placeholders ($1) instead of string interpolation",
+        "originalCode": "        ResultSet rs = stmt.executeQuery(\"SELECT * FROM invoices WHERE account_id = '\" + accountId + \"'\");",
+        "ruleMatched": "sec-sql-injection"
+      },
+      {
+        "id": "finding-2e079e71",
+        "file": "src/main/java/com/acme/billing/InvoiceService.java",
+        "startLine": 12,
+        "endLine": 12,
+        "severity": "critical",
+        "category": "security",
+        "title": "Java SQL Injection via string concatenation in raw query",
+        "body": "Concatenating untrusted variables directly into SQL or HQL statements causes **SQL Injection (CWE-89)**. Use `PreparedStatement` with parameterized placeholders (`?`) or named query parameters.",
+        "suggestionCode": "        // Use PreparedStatement: conn.prepareStatement(\"SELECT ... WHERE id = ?\"); pstmt.setString(1, id);",
+        "originalCode": "        ResultSet rs = stmt.executeQuery(\"SELECT * FROM invoices WHERE account_id = '\" + accountId + \"'\");",
+        "ruleMatched": "java-sql-injection"
+      },
+      {
+        "id": "finding-8f9a89dd",
+        "file": "src/main/java/com/acme/billing/InvoiceService.java",
+        "startLine": 17,
+        "endLine": 17,
+        "severity": "warning",
+        "category": "bug",
+        "title": "Resource leak: stream or connection not managed by try-with-resources",
+        "body": "I/O streams, database connections, and sockets implement `AutoCloseable` and must be enclosed in a `try (...)` (try-with-resources) block to guarantee resource reclamation on abnormal termination.",
+        "suggestionCode": "        try (var resource = FileInputStream fis = new FileInputStream(path);) {\n            // use resource safely\n        }",
+        "originalCode": "        FileInputStream fis = new FileInputStream(path);",
+        "ruleMatched": "java-unclosed-stream-connection"
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **Main** (+21/-0 lines). OpenRabbit identified **2 critical issue(s)** and **1 warning(s)** that should be addressed prior to merge.\n\n### 📋 Summary by OpenRabbit\n- **New Features & Modules**\n  - Main: Introduces new Java module defining `InvoiceService`, `findInvoices`, `loadAuditLog`, `FileInputStream` (+21 lines).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦🟦🟦🟦 (5/5) (~8 min) |\n| **Risk Assessment** | **CRITICAL** (2 critical, 1 warnings) |\n| **Actionable Comments** | **3** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `src/main/java/com/acme/billing/InvoiceService.java` | Main | `+21/-0` | 🔴 High | Introduces new Java module defining `InvoiceService`, `findInvoices`, `loadAuditLog`, `FileInputStream` (+21 lines). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_InvoiceService_java as InvoiceService.java\n  Caller->>+M0_InvoiceService_java: Invoke InvoiceService()\n  M0_InvoiceService_java-->>-Caller: Return result\n```\n\n</details>\n\n> [!WARNING]\n> **Security Advisories Detected**\n> - src/main/java/com/acme/billing/InvoiceService.java:L12 — Potential SQL Injection via string interpolation\n> - src/main/java/com/acme/billing/InvoiceService.java:L12 — Java SQL Injection via string concatenation in raw query\n\n### 🥕 Poem\n> A twitch of the ear at `InvoiceService.java` in flight,\n> Green lines of ambition, bold changes in sight—\n> Yet traps in the burrow lurk under the clover,\n> Let's patch up the hazards before hopping over! 🐇🛡️\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/src/main/java/com/acme/billing/InvoiceService.java b/src/main/java/com/acme/billing/InvoiceService.java\nnew file mode 100644\nindex 0000000..4b5c6d7\n--- /dev/null\n+++ b/src/main/java/com/acme/billing/InvoiceService.java\n@@ -0,0 +1,24 @@\n+package com.acme.billing;\n+\n+import java.io.FileInputStream;\n+import java.sql.Connection;\n+import java.sql.ResultSet;\n+import java.sql.Statement;\n+\n+public class InvoiceService {\n+    public void findInvoices(Connection conn, String accountId) throws Exception {\n+        Statement stmt = conn.createStatement();\n+        // SQL Injection via string concatenation\n+        ResultSet rs = stmt.executeQuery(\"SELECT * FROM invoices WHERE account_id = '\" + accountId + \"'\");\n+    }\n+\n+    public void loadAuditLog(String path) throws Exception {\n+        // Unclosed stream without try-with-resources\n+        FileInputStream fis = new FileInputStream(path);\n+        fis.read();\n+    }\n+}\n+"
+  },
+  {
+    "id": "rev-0991cac4",
+    "createdAt": "2026-10-18T14:46:39.278Z",
+    "source": "cli",
+    "repository": "acme-corp/engine-core",
+    "prTitle": "feat(network): packet decoder and session buffer allocator",
+    "author": "developer",
+    "baseBranch": "main",
+    "headBranch": "feat/branch",
+    "commitSha": "5f2e0ada",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 23,
+      "deletions": 0,
+      "findingsCount": 3,
+      "criticalCount": 1,
+      "warningCount": 2,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 0
+    },
+    "walkthrough": {
+      "title": "feat(network): packet decoder and session buffer allocator",
+      "executiveSummary": "This pull request modifies **1 file** across **Network** (+23/-0 lines). OpenRabbit identified **1 critical issue(s)** and **2 warning(s)** that should be addressed prior to merge.",
+      "releaseNotes": [
+        {
+          "category": "New Features & Modules",
+          "items": [
+            "Network: Introduces new C++ module defining `PacketDecoder`, `decode_packet`, `f`, `process_buffer` (+23 lines)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": "src/network/packet_decoder.cpp",
+          "status": "added",
+          "additions": 23,
+          "deletions": 0,
+          "component": "Network",
+          "summary": "Introduces new C++ module defining `PacketDecoder`, `decode_packet`, `f`, `process_buffer` (+23 lines).",
+          "impact": "high"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_packet_decoder_cpp as packet_decoder.cpp\n  Caller->>+M0_packet_decoder_cpp: Invoke PacketDecoder()\n  M0_packet_decoder_cpp-->>-Caller: Return result",
+      "poem": "A twitch of the ear at `packet_decoder.cpp` in flight,\nGreen lines of ambition, bold changes in sight—\nYet traps in the burrow lurk under the clover,\nLet's patch up the hazards before hopping over! 🐇🛡️",
+      "effortScore": 4,
+      "estimatedMinutes": 8,
+      "riskLevel": "critical",
+      "securityConcerns": [
+        "src/network/packet_decoder.cpp:L10 — Unsafe C string function vulnerable to buffer overflow"
+      ]
+    },
+    "findings": [
+      {
+        "id": "finding-0cec4b89",
+        "file": "src/network/packet_decoder.cpp",
+        "startLine": 10,
+        "endLine": 10,
+        "severity": "critical",
+        "category": "security",
+        "title": "Unsafe C string function vulnerable to buffer overflow",
+        "body": "Using unbounded buffer functions (`strcpy`, `strcat`, `sprintf`, `gets`) is a classic source of **Buffer Overflow (CWE-120)** and arbitrary code execution. In modern C++, use `std::string`, `std::format` (C++20), or `snprintf` with explicit destination bounds.",
+        "suggestionCode": "        snprintf(buffer, sizeof(buffer), buffer, \"packet_%s_decoded\", packet_id);",
+        "originalCode": "        sprintf(buffer, \"packet_%s_decoded\", packet_id);",
+        "ruleMatched": "cpp-unsafe-string-function"
+      },
+      {
+        "id": "finding-bdc46149",
+        "file": "src/network/packet_decoder.cpp",
+        "startLine": 13,
+        "endLine": 13,
+        "severity": "warning",
+        "category": "maintainability",
+        "title": "C++ Raw `new` allocation without RAII smart pointer",
+        "body": "Manual memory management using raw `new` risks memory leaks and double-free bugs on exceptions. In modern C++ (C++11/14/20), prefer `std::make_unique<T>()` or `std::make_shared<T>()` to enforce RAII ownership.",
+        "suggestionCode": "        auto ptr = std::make_unique<TargetType>();",
+        "originalCode": "        char* raw_session = new char[1024];",
+        "ruleMatched": "cpp-raw-pointer-new"
+      },
+      {
+        "id": "finding-a925d218",
+        "file": "src/network/packet_decoder.cpp",
+        "startLine": 17,
+        "endLine": 17,
+        "severity": "warning",
+        "category": "bug",
+        "title": "Catching exception by value causes object slicing",
+        "body": "Catching exceptions by value slices derived exception objects, discarding polymorphic error information and copy-constructing an exception. Catch by `const &` instead (`catch (const std::exception& e)`).",
+        "suggestionCode": "        } catch (const std::exception& e) {",
+        "originalCode": "        } catch (std::exception e) {",
+        "ruleMatched": "cpp-catch-by-value"
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **Network** (+23/-0 lines). OpenRabbit identified **1 critical issue(s)** and **2 warning(s)** that should be addressed prior to merge.\n\n### 📋 Summary by OpenRabbit\n- **New Features & Modules**\n  - Network: Introduces new C++ module defining `PacketDecoder`, `decode_packet`, `f`, `process_buffer` (+23 lines).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦🟦🟦⬜ (4/5) (~8 min) |\n| **Risk Assessment** | **CRITICAL** (1 critical, 2 warnings) |\n| **Actionable Comments** | **3** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `src/network/packet_decoder.cpp` | Network | `+23/-0` | 🔴 High | Introduces new C++ module defining `PacketDecoder`, `decode_packet`, `f`, `process_buffer` (+23 lines). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_packet_decoder_cpp as packet_decoder.cpp\n  Caller->>+M0_packet_decoder_cpp: Invoke PacketDecoder()\n  M0_packet_decoder_cpp-->>-Caller: Return result\n```\n\n</details>\n\n> [!WARNING]\n> **Security Advisories Detected**\n> - src/network/packet_decoder.cpp:L10 — Unsafe C string function vulnerable to buffer overflow\n\n### 🥕 Poem\n> A twitch of the ear at `packet_decoder.cpp` in flight,\n> Green lines of ambition, bold changes in sight—\n> Yet traps in the burrow lurk under the clover,\n> Let's patch up the hazards before hopping over! 🐇🛡️\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/src/network/packet_decoder.cpp b/src/network/packet_decoder.cpp\nnew file mode 100644\nindex 0000000..9b0c1d2\n--- /dev/null\n+++ b/src/network/packet_decoder.cpp\n@@ -0,0 +1,25 @@\n+#include <cstdio>\n+#include <stdexcept>\n+#include <string>\n+\n+class PacketDecoder {\n+public:\n+    void decode_packet(const char* packet_id) {\n+        char buffer[64];\n+        // Unsafe sprintf buffer overflow\n+        sprintf(buffer, \"packet_%s_decoded\", packet_id);\n+\n+        // Raw new without smart pointer\n+        char* raw_session = new char[1024];\n+\n+        try {\n+            process_buffer(buffer);\n+        } catch (std::exception e) {\n+            // Object slicing catch-by-value\n+        }\n+    }\n+private:\n+    void process_buffer(const char* buf) {}\n+};\n"
+  },
+  {
+    "id": "rev-472a62c4",
+    "createdAt": "2026-10-18T14:46:33.675Z",
+    "source": "cli",
+    "repository": "acme-corp/orders-api",
+    "prTitle": "feat(orders): add customer order repository and cache synchronization",
+    "author": "developer",
+    "baseBranch": "main",
+    "headBranch": "feat/branch",
+    "commitSha": "b9708f95",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 23,
+      "deletions": 0,
+      "findingsCount": 2,
+      "criticalCount": 2,
+      "warningCount": 0,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 0
+    },
+    "walkthrough": {
+      "title": "feat(orders): add customer order repository and cache synchronization",
+      "executiveSummary": "This pull request modifies **1 file** across **Repositories** (+23/-0 lines). OpenRabbit identified **2 critical issue(s)** and **0 warning(s)** that should be addressed prior to merge.",
+      "releaseNotes": [
+        {
+          "category": "New Features & Modules",
+          "items": [
+            "Repositories: Introduces new C# module defining `OrderRepository`, `GetOrderAsync`, `SyncOrderCache` (+23 lines)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": "src/Repositories/OrderRepository.cs",
+          "status": "added",
+          "additions": 23,
+          "deletions": 0,
+          "component": "Repositories",
+          "summary": "Introduces new C# module defining `OrderRepository`, `GetOrderAsync`, `SyncOrderCache` (+23 lines).",
+          "impact": "high"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_OrderRepository_cs as OrderRepository.cs\n  Caller->>+M0_OrderRepository_cs: Invoke OrderRepository()\n  M0_OrderRepository_cs-->>-Caller: Return result",
+      "poem": "A twitch of the ear at `OrderRepository.cs` in flight,\nGreen lines of ambition, bold changes in sight—\nYet traps in the burrow lurk under the clover,\nLet's patch up the hazards before hopping over! 🐇🛡️",
+      "effortScore": 5,
+      "estimatedMinutes": 6,
+      "riskLevel": "critical",
+      "securityConcerns": [
+        "src/Repositories/OrderRepository.cs:L14 — C# SQL Injection via string interpolation in raw query"
+      ]
+    },
+    "findings": [
+      {
+        "id": "finding-a08dfca9",
+        "file": "src/Repositories/OrderRepository.cs",
+        "startLine": 14,
+        "endLine": 14,
+        "severity": "critical",
+        "category": "security",
+        "title": "C# SQL Injection via string interpolation in raw query",
+        "body": "Interpolating strings into raw queries or passing interpolated strings to `FromSqlRaw` / `SqlCommand` creates a **SQL Injection (CWE-89)** vulnerability. Use `FromSqlInterpolated` (which safely parameterizes string interpolations) or parameterized queries.",
+        "suggestionCode": "        // Use FromSqlInterpolated($\"...\") or parameterized query",
+        "originalCode": "        var query = $\"SELECT * FROM Orders WHERE CustomerId = '{customerId}'\";",
+        "ruleMatched": "cs-sql-injection"
+      },
+      {
+        "id": "finding-12181261",
+        "file": "src/Repositories/OrderRepository.cs",
+        "startLine": 18,
+        "endLine": 18,
+        "severity": "critical",
+        "category": "bug",
+        "title": "C# `async void` method can crash process on unhandled exception",
+        "body": "`async void` methods cannot be awaited and unhandled exceptions inside them crash the application process without triggering caller catch blocks. Return `Task` instead, reserving `async void` strictly for UI event handlers.",
+        "suggestionCode": "    public async Task SyncOrderCache(string orderId)",
+        "originalCode": "    public async void SyncOrderCache(string orderId)",
+        "ruleMatched": "cs-async-void"
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **Repositories** (+23/-0 lines). OpenRabbit identified **2 critical issue(s)** and **0 warning(s)** that should be addressed prior to merge.\n\n### 📋 Summary by OpenRabbit\n- **New Features & Modules**\n  - Repositories: Introduces new C# module defining `OrderRepository`, `GetOrderAsync`, `SyncOrderCache` (+23 lines).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦🟦🟦🟦 (5/5) (~6 min) |\n| **Risk Assessment** | **CRITICAL** (2 critical, 0 warnings) |\n| **Actionable Comments** | **2** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `src/Repositories/OrderRepository.cs` | Repositories | `+23/-0` | 🔴 High | Introduces new C# module defining `OrderRepository`, `GetOrderAsync`, `SyncOrderCache` (+23 lines). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_OrderRepository_cs as OrderRepository.cs\n  Caller->>+M0_OrderRepository_cs: Invoke OrderRepository()\n  M0_OrderRepository_cs-->>-Caller: Return result\n```\n\n</details>\n\n> [!WARNING]\n> **Security Advisories Detected**\n> - src/Repositories/OrderRepository.cs:L14 — C# SQL Injection via string interpolation in raw query\n\n### 🥕 Poem\n> A twitch of the ear at `OrderRepository.cs` in flight,\n> Green lines of ambition, bold changes in sight—\n> Yet traps in the burrow lurk under the clover,\n> Let's patch up the hazards before hopping over! 🐇🛡️\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/src/Repositories/OrderRepository.cs b/src/Repositories/OrderRepository.cs\nnew file mode 100644\nindex 0000000..8a9b0c1\n--- /dev/null\n+++ b/src/Repositories/OrderRepository.cs\n@@ -0,0 +1,24 @@\n+using System;\n+using System.Threading.Tasks;\n+using Microsoft.EntityFrameworkCore;\n+\n+namespace Acme.Repositories;\n+\n+public class OrderRepository\n+{\n+    private readonly DbContext _context;\n+\n+    public async Task<Order> GetOrderAsync(string customerId)\n+    {\n+        // SQL Injection via string interpolation in FromSqlRaw\n+        var query = $\"SELECT * FROM Orders WHERE CustomerId = '{customerId}'\";\n+        return await _context.Orders.FromSqlRaw(query).FirstOrDefaultAsync();\n+    }\n+\n+    public async void SyncOrderCache(string orderId)\n+    {\n+        // async void crash risk\n+        await Task.Delay(100);\n+    }\n+}\n"
+  },
+  {
     "id": "rev-ad9190bd",
     "createdAt": "2026-10-18T14:11:43.410Z",
     "source": "cli",
