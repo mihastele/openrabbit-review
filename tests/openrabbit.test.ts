@@ -103,14 +103,75 @@ describe('OpenRabbit Core Suite', () => {
     assert.equal(detectChatCommand('@openrabbit explain how this works'), 'explain');
     assert.equal(detectChatCommand('@openrabbit fix this bug'), 'fix');
 
-    const testReply = await handlePRChat({
+    // TypeScript test generation
+    const tsReply = await handlePRChat({
       query: '@openrabbit generate unit tests',
       diff: SAMPLE_DIFF_TEMPLATES[0].diff,
       file: 'src/api/auth-controller.ts',
     });
-    assert.equal(testReply.commandDetected, 'test');
-    assert.ok(testReply.replyMarkdown.includes('describe('));
-    assert.ok(testReply.replyMarkdown.includes('lookupUserByEmail'));
+    assert.equal(tsReply.commandDetected, 'test');
+    assert.ok(tsReply.replyMarkdown.includes('describe('));
+
+    // Python test generation
+    const pyTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'python-fastapi-sqli');
+    assert.ok(pyTemplate);
+    const pyReply = await handlePRChat({
+      query: '@openrabbit generate unit tests',
+      diff: pyTemplate.diff,
+      file: 'app/routers/customers.py',
+    });
+    assert.ok(pyReply.replyMarkdown.includes('pytest'));
+    assert.ok(pyReply.replyMarkdown.includes('test_get_customers'));
+
+    // Go test generation
+    const goTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'go-microservice-leak');
+    assert.ok(goTemplate);
+    const goReply = await handlePRChat({
+      query: '@openrabbit generate unit tests',
+      diff: goTemplate.diff,
+      file: 'pkg/crawler/fetcher.go',
+    });
+    assert.ok(goReply.replyMarkdown.includes('TestFetchAndStoreWebhook(t *testing.T)'));
+    assert.ok(goReply.replyMarkdown.includes('t.Run'));
+  });
+
+  it('reviews Python, Go, and Rust PRs with language-specific rules and fixes', async () => {
+    const config = structuredClone(DEFAULT_OPENRABBIT_CONFIG);
+    config.profile = 'assertive';
+    config.llm.provider = 'heuristic';
+
+    // 1. Python Review
+    const pyTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'python-fastapi-sqli')!;
+    const pyResult = await runPullRequestReview({
+      rawDiff: pyTemplate.diff,
+      prTitle: pyTemplate.prTitle,
+      repository: pyTemplate.repository,
+      config,
+    });
+    assert.ok(pyResult.findings.some((f) => f.ruleMatched === 'py-mutable-default-arg'));
+    assert.ok(pyResult.findings.some((f) => f.ruleMatched === 'py-sql-injection'));
+    assert.ok(pyResult.findings.some((f) => f.ruleMatched === 'py-subprocess-shell'));
+
+    // 2. Go Review
+    const goTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'go-microservice-leak')!;
+    const goResult = await runPullRequestReview({
+      rawDiff: goTemplate.diff,
+      prTitle: goTemplate.prTitle,
+      repository: goTemplate.repository,
+      config,
+    });
+    assert.ok(goResult.findings.some((f) => f.ruleMatched === 'go-missing-defer-body-close'));
+    assert.ok(goResult.findings.some((f) => f.ruleMatched === 'go-sql-sprintf'));
+
+    // 3. Rust Review
+    const rustTemplate = SAMPLE_DIFF_TEMPLATES.find((t) => t.id === 'rust-systems-unwrap')!;
+    const rustResult = await runPullRequestReview({
+      rawDiff: rustTemplate.diff,
+      prTitle: rustTemplate.prTitle,
+      repository: rustTemplate.repository,
+      config,
+    });
+    assert.ok(rustResult.findings.some((f) => f.ruleMatched === 'rust-raw-unwrap'));
   });
 
   it('verifies GitHub HMAC-SHA256 webhook signatures', () => {

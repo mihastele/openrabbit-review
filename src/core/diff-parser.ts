@@ -50,14 +50,26 @@ export function inferComponentName(filePath: string): string {
 export function extractChangedSymbols(hunks: DiffHunk[]): string[] {
   const symbols = new Set<string>();
   const patterns = [
+    // JS/TS
     /(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)/,
     /(?:export\s+)?class\s+([A-Za-z0-9_$]+)/,
     /(?:export\s+)?interface\s+([A-Za-z0-9_$]+)/,
+    /(?:export\s+)?type\s+([A-Za-z0-9_$]+)\s*=/,
     /(?:export\s+)?const\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>/,
     /^\s*(?:async\s+)?([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\([^)]*\)\s*(?::\s*[^{]+)?\{/,
-    /def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/,
+    // Python
+    /(?:async\s+)?def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/,
+    /class\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*\([^)]*\))?:/,
+    // Go
     /func\s+(?:\([^)]+\)\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/,
-    /fn\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[<(]/,
+    /type\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:struct|interface)/,
+    // Rust
+    /(?:pub(?:\([^)]+\))?\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[<(]/,
+    /(?:pub(?:\([^)]+\))?\s+)?(?:struct|enum|trait|type)\s+([a-zA-Z_][a-zA-Z0-9_]*)/,
+    /impl(?:<[^>]+>)?\s+([a-zA-Z_][a-zA-Z0-9_]*)/,
+    // Java / Kotlin / C# / C++
+    /(?:public|private|protected|static|final|fun)\s+(?:async\s+)?(?:[a-zA-Z0-9_<>[\]]+\s+)+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/,
+    /(?:public|private|protected)?\s*class\s+([a-zA-Z_][a-zA-Z0-9_]*)/,
   ];
 
   for (const hunk of hunks) {

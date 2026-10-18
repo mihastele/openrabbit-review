@@ -19,20 +19,27 @@ Code reviews shouldn't require surrendering your proprietary source code to a cl
 2. **📝 Line-by-Line Inline Code Reviews with One-Click Committable Suggestions**:
    - Pinpoints exact diff lines and emits GitHub (` ```suggestion `) and GitLab (` ```suggestion:-0+0 `) committable code blocks.
    - Combines a built-in deterministic **Static + AST Security/Concurrency Analyzer** with **Multi-Provider LLMs**.
-3. **💬 Interactive `@openrabbit` PR Chat & Commands**:
+3. **🌐 Practical Multi-Language Support**:
+   - **Python**: Catches mutable default args (`def f(x=[])`), raw f-string SQL injection, `shell=True` subprocesses, bare `except:`, and generates `pytest` test suites with `@pytest.mark.asyncio`.
+   - **Go**: Detects missing `defer resp.Body.Close()`, `fmt.Sprintf` SQL queries, unhandled errors (`_ = ...`), and generates table-driven `go test` suites.
+   - **Rust**: Flags unhandled production `.unwrap()` calls (suggesting `?` or `.unwrap_or_default()`), unannotated `unsafe` blocks, and generates `cargo test` suites.
+   - **Java / Kotlin**: Detects JDBC/JPA raw query concatenation, unclosed resources, and generates JUnit 5 test classes.
+   - **Shell / Bash**: Enforces `set -euo pipefail` strict mode and unquoted expansions.
+   - **TypeScript / JavaScript**: Flags async `.forEach()`, loose equality `==`, uncleaned event/timer leaks, and React hook dependencies.
+4. **💬 Interactive `@openrabbit` PR Chat & Commands**:
    - Reply in any PR or inline review thread with:
      - `@openrabbit explain` — Deep-dive explanation of the hunk & execution flow
-     - `@openrabbit test` — Generates ready-to-run unit test suites (`Vitest`/`Jest`) for the modified functions
-     - `@openrabbit fix` — Produces a committable replacement patch
-     - `@openrabbit docstring` — Generates JSDoc/TSDoc for changed symbols
+     - `@openrabbit test` — Generates language-specific unit tests (`pytest`, `go test`, `cargo test`, `JUnit`, `Vitest`)
+     - `@openrabbit fix` — Produces a committable replacement patch matching language idioms
+     - `@openrabbit docstring` — Generates PEP-257 docstrings, Go comments, Rustdoc, or TSDoc
      - `@openrabbit resolve` — Marks the review discussion resolved
-4. **🔑 Multi-Provider BYOK + 100% Private Local Mode**:
+5. **🔑 Multi-Provider BYOK + 100% Private Local Mode**:
    - **OpenAI** (`gpt-4o`, `o3-mini`, or any compatible endpoint like Groq, DeepSeek, OpenRouter)
    - **Anthropic Claude** (`claude-3-7-sonnet-latest`)
    - **Google Gemini** (`gemini-2.5-pro`, `gemini-2.5-flash`)
    - **Ollama** (`qwen2.5-coder`, `deepseek-r1`, `llama3.3` for 100% air-gapped private reviews)
    - **Built-in Static/AST Heuristic Engine** (works immediately with zero API keys!)
-5. **⚙️ Drop-in `.openrabbit.yaml` & `.coderabbit.yaml` Compatibility**:
+6. **⚙️ Drop-in `.openrabbit.yaml` & `.coderabbit.yaml` Compatibility**:
    - Supports `profile: chill | assertive | security-focused`, glob `path_filters`, and per-directory `path_instructions`.
 
 ---
@@ -85,13 +92,22 @@ flowchart LR
 # Install dependencies
 npm install
 
-# Run a live terminal review on a sample PR (or your local uncommitted git diff)
+# 1. Review a Python PR (detects mutable defaults, SQL injection, shell=True)
+npm run review -- --demo python-fastapi-sqli
+
+# 2. Review a Go PR (detects missing defer resp.Body.Close(), fmt.Sprintf SQL)
+npm run review -- --demo go-microservice-leak
+
+# 3. Review a Rust PR (detects production unwrap() panics)
+npm run review -- --demo rust-systems-unwrap
+
+# 4. Review a TypeScript/Auth PR (detects JWT secret leak, SQLi, async forEach)
 npm run review -- --demo auth-jwt-sqli
 
-# Review your staged git changes
+# 5. Review your own staged git changes across any language
 npx tsx src/cli/index.ts review --staged
 
-# Ask @openrabbit to generate unit tests from the CLI
+# 6. Ask @openrabbit to generate language-specific unit tests (pytest / go test / vitest)
 npx tsx src/cli/index.ts chat "@openrabbit generate unit tests"
 ```
 

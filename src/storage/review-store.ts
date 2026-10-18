@@ -94,7 +94,7 @@ index 1122334..5566778 100644
   },
   {
     id: 'clean-stream-worker',
-    name: 'Core Engine: Batch Telemetry Dispatcher',
+    name: 'TypeScript: Batch Telemetry Dispatcher',
     prTitle: 'perf(telemetry): bounded concurrent batch flushing with backpressure',
     repository: 'acme-corp/telemetry-engine',
     prNumber: 315,
@@ -128,6 +128,114 @@ index 89a1b2c..c4d5e6f 100644
 +
 +  return { flushed: events.length, batches };
  }
+`,
+  },
+  {
+    id: 'python-fastapi-sqli',
+    name: 'Python: FastAPI Customer Query & Shell Exporter',
+    prTitle: 'feat(api): customer query endpoint and CSV report exporter',
+    repository: 'acme-corp/data-service',
+    prNumber: 198,
+    author: 'guido-py',
+    description:
+      'Python PR with mutable default arguments, f-string SQL injection, and subprocess shell=True vulnerability.',
+    diff: `diff --git a/app/routers/customers.py b/app/routers/customers.py
+new file mode 100644
+index 0000000..7a8b9c1
+--- /dev/null
++++ b/app/routers/customers.py
+@@ -0,0 +1,28 @@
++import sqlite3
++import subprocess
++from typing import List, Dict, Any
++
++def get_customers(tenant_id: str, filters: dict = {}) -> List[Dict[str, Any]]:
++    conn = sqlite3.connect("app.db")
++    cursor = conn.cursor()
++    # Raw f-string SQL query
++    query = f"SELECT id, name, email FROM customers WHERE tenant_id = '{tenant_id}'"
++    cursor.execute(query)
++    rows = cursor.fetchall()
++    return [{"id": r[0], "name": r[1], "email": r[2]} for r in rows]
++
++def export_backup_report(output_path: str, table_name: str) -> None:
++    try:
++        cmd = f"sqlite3 app.db .dump {table_name} > {output_path}"
++        subprocess.run(cmd, shell=True, check=True)
++    except:
++        pass
+`,
+  },
+  {
+    id: 'go-microservice-leak',
+    name: 'Go: Webhook Poller & Database Persister',
+    prTitle: 'feat(webhook): ingest incoming webhook and persist payload',
+    repository: 'acme-corp/event-streamer',
+    prNumber: 224,
+    author: 'rob-go',
+    description:
+      'Go PR with missing defer resp.Body.Close(), fmt.Sprintf SQL query, and ignored error handling.',
+    diff: `diff --git a/pkg/crawler/fetcher.go b/pkg/crawler/fetcher.go
+new file mode 100644
+index 0000000..6b5c4d3
+--- /dev/null
++++ b/pkg/crawler/fetcher.go
+@@ -0,0 +1,29 @@
++package crawler
++
++import (
++	"database/sql"
++	"encoding/json"
++	"fmt"
++	"net/http"
++)
++
++func FetchAndStoreWebhook(db *sql.DB, targetURL string, eventType string) error {
++	resp, err := http.Get(targetURL)
++	if err != nil {
++		return err
++	}
++	// Missing defer resp.Body.Close()
++
++	var payload map[string]interface{}
++	_ = json.NewDecoder(resp.Body).Decode(&payload)
++
++	// Unsafe SQL format
++	query := fmt.Sprintf("INSERT INTO events (event_type, payload) VALUES ('%s', 'data')", eventType)
++	_, err = db.Exec(query)
++	return err
++}
+`,
+  },
+  {
+    id: 'rust-systems-unwrap',
+    name: 'Rust: Config Loader & Token Cache',
+    prTitle: 'feat(cache): reload cluster configuration and token cache',
+    repository: 'acme-corp/edge-proxy',
+    prNumber: 367,
+    author: 'ferris-rs',
+    description:
+      'Rust PR with unchecked production .unwrap() calls on I/O operations.',
+    diff: `diff --git a/src/config/reader.rs b/src/config/reader.rs
+new file mode 100644
+index 0000000..3e2d1c0
+--- /dev/null
++++ b/src/config/reader.rs
+@@ -0,0 +1,21 @@
++use std::fs::File;
++use std::io::Read;
++
++pub fn load_cluster_config(file_path: &str) -> String {
++    // Panic on unwrap in production
++    let mut file = File::open(file_path).unwrap();
++    let mut contents = String::new();
++    file.read_to_string(&mut contents).unwrap();
++    contents
++}
++
++pub fn parse_port(raw: &str) -> u16 {
++    raw.parse::<u16>().unwrap()
++}
 `,
   },
 ];

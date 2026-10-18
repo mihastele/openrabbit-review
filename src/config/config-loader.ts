@@ -41,6 +41,21 @@ export const DEFAULT_OPENRABBIT_CONFIG: OpenRabbitConfig = {
           'Check for React hook dependency array bugs, stale closures, memory leaks in useEffect, and accessibility attributes.',
       },
       {
+        path: '**/*.py',
+        instructions:
+          'Enforce PEP 8 conventions, verify mutable default arguments, prevent SQL injection in f-strings, check subprocess shell=False, and ensure exception handling specificity.',
+      },
+      {
+        path: '**/*.go',
+        instructions:
+          'Ensure all returned errors are handled, verify defer resp.Body.Close() on HTTP responses, prevent fmt.Sprintf SQL injection, and guard against goroutine leaks.',
+      },
+      {
+        path: '**/*.rs',
+        instructions:
+          'Prevent unwrap() in production error paths (prefer ? or unwrap_or_default), document unsafe blocks with // SAFETY: comments, and audit clone() efficiency.',
+      },
+      {
         path: 'tests/**',
         instructions:
           'Ensure tests cover edge cases, error paths, and avoid brittle timing assumptions.',

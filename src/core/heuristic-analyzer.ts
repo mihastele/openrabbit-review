@@ -245,6 +245,217 @@ const HEURISTIC_RULES: HeuristicRule[] = [
       };
     },
   },
+  // =========================================================================
+  // Python Rules
+  // =========================================================================
+  {
+    id: 'py-mutable-default-arg',
+    title: 'Python mutable default argument retains state across function calls',
+    severity: 'warning',
+    category: 'bug',
+    matchLine: (line, file) =>
+      file.language === 'Python' &&
+      /def\s+[a-zA-Z0-9_]+\([^)]*=\s*(\[\]|\{\}|set\(\))/.test(line),
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      const fixed = line.replace(/=\s*(\[\]|\{\}|set\(\))/g, '= None');
+      return {
+        body: 'Default argument values in Python are evaluated once when the function is defined. Using mutable defaults (`[]`, `{}`) causes state to be shared across all invocations (**Common Python Bug**). Use `None` as the default and assign a new instance inside the function body.',
+        suggestionCode: `${fixed}\n${indent}    # inside body: if param is None: param = []`,
+      };
+    },
+  },
+  {
+    id: 'py-sql-injection',
+    title: 'Python SQL Injection via f-string or string formatting',
+    severity: 'critical',
+    category: 'security',
+    matchLine: (line, file) =>
+      file.language === 'Python' &&
+      (/(?:execute|raw)\s*\(\s*f["'].*\{/.test(line) ||
+        /(?:execute|raw)\s*\(\s*["'].*%\s*[a-zA-Z0-9_.]+/i.test(line) ||
+        /f["'].*(?:SELECT|INSERT|UPDATE|DELETE)\b.*(?:WHERE|VALUES)\b.*\{/i.test(
+          line
+        )),
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      const cleaned = line
+        .replace(/f(["'])(.*?)\{([a-zA-Z0-9_.]+)\}(.*?)\1/g, '$1$2%s$4$1, ($3,)')
+        .replace(/'%s'/g, '%s');
+      return {
+        body: 'Interpolating variables into SQL queries via Python f-strings or `%` format strings causes **SQL Injection (CWE-89)**. Use database cursor parameterized queries with placeholders (`%s` or `?`) and a parameter tuple/list.',
+        suggestionCode: cleaned !== line ? cleaned : `${indent}cursor.execute("SELECT ... WHERE id = %s", (param,))`,
+      };
+    },
+  },
+  {
+    id: 'py-subprocess-shell',
+    title: 'Python `shell=True` or `os.system()` allows command injection',
+    severity: 'critical',
+    category: 'security',
+    matchLine: (line, file) =>
+      file.language === 'Python' &&
+      (/(?:subprocess\.(?:run|call|Popen|check_output)\s*\([^)]*shell\s*=\s*True)/.test(
+        line
+      ) ||
+        /\bos\.system\s*\(/.test(line)),
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      return {
+        body: 'Invoking shell commands with `shell=True` or `os.system()` invites **Command Injection (CWE-78)** if arguments contain untrusted user input. Pass arguments as a list of strings (`["cmd", arg1, arg2]`) with `shell=False`.',
+        suggestionCode: line.includes('shell=True')
+          ? line.replace(/shell\s*=\s*True/, 'shell=False')
+          : `${indent}subprocess.run(["command", arg1], check=True)`,
+      };
+    },
+  },
+  {
+    id: 'py-bare-except',
+    title: 'Bare `except:` catches SystemExit and KeyboardInterrupt',
+    severity: 'warning',
+    category: 'bug',
+    matchLine: (line, file) =>
+      file.language === 'Python' &&
+      (/^\s*except\s*:\s*$/.test(line) || /^\s*except\s+BaseException\s*:/.test(line)),
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      return {
+        body: 'A bare `except:` catches `KeyboardInterrupt` (Ctrl+C) and `SystemExit`, preventing normal application termination and masking unexpected syntax or type errors. Catch `Exception` explicitly.',
+        suggestionCode: `${indent}except Exception as err:`,
+      };
+    },
+  },
+  // =========================================================================
+  // Go Rules
+  // =========================================================================
+  {
+    id: 'go-missing-defer-body-close',
+    title: 'Missing `defer resp.Body.Close()` leaks TCP sockets and goroutines',
+    severity: 'warning',
+    category: 'bug',
+    matchLine: (line, file, contextLines) => {
+      if (file.language !== 'Go') return false;
+      if (!/(?:http\.(?:Get|Post|Head)|client\.Do)\s*\(/.test(line)) return false;
+      const joined = contextLines.join('\n');
+      return !/Body\.Close/.test(joined);
+    },
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      return {
+        body: 'In Go, HTTP response bodies must be closed to reuse network connections and avoid descriptor leaks. Add `defer resp.Body.Close()` immediately after checking `err != nil`.',
+        suggestionCode: `${line}\n${indent}if err != nil {\n${indent}    return err\n${indent}}\n${indent}defer resp.Body.Close()`,
+      };
+    },
+  },
+  {
+    id: 'go-sql-sprintf',
+    title: 'Go SQL query formatted with `fmt.Sprintf` allows SQL injection',
+    severity: 'critical',
+    category: 'security',
+    matchLine: (line, file) =>
+      file.language === 'Go' &&
+      /(?:db\.(?:Query|QueryRow|Exec|Select)|sqlx?)\b.*fmt\.Sprintf|fmt\.Sprintf\s*\(\s*["'](?:SELECT|INSERT|UPDATE|DELETE)\b.*%s/i.test(
+        line
+      ),
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      return {
+        body: 'Formatting SQL queries using `fmt.Sprintf` exposes the database to **SQL Injection (CWE-89)**. Pass parameters into `db.QueryContext` or `db.Query` using placeholder tokens (`$1` in PostgreSQL, `?` in MySQL/SQLite).',
+        suggestionCode: `${indent}// Use parameterized query: db.QueryContext(ctx, "SELECT ... WHERE id = $1", id)`,
+      };
+    },
+  },
+  {
+    id: 'go-ignored-error',
+    title: 'Unchecked or blank error assignment `_ = ...` ignores runtime failure',
+    severity: 'suggestion',
+    category: 'maintainability',
+    matchLine: (line, file) =>
+      file.language === 'Go' &&
+      /^\s*_\s*=\s*(?:json\.Unmarshal|os\.Remove|http\.|io\.Copy|db\.)/.test(line),
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      return {
+        body: 'Discarding errors with `_ =` silently masks I/O or decoding failures in Go. Check and handle `if err != nil` to avoid invalid program states.',
+        suggestionCode: `${indent}if err := ${line.replace(/^\s*_\s*=\s*/, '')}; err != nil {\n${indent}    return err\n${indent}}`,
+      };
+    },
+  },
+  // =========================================================================
+  // Rust Rules
+  // =========================================================================
+  {
+    id: 'rust-raw-unwrap',
+    title: 'Unchecked `.unwrap()` causes thread panic in production code',
+    severity: 'warning',
+    category: 'bug',
+    matchLine: (line, file) =>
+      file.language === 'Rust' &&
+      !file.newPath.includes('test') &&
+      /\.[uU]nwrap\s*\(\)/.test(line),
+    buildFinding: (line) => {
+      const replaced = line.replace(/\.unwrap\(\)/g, '?');
+      return {
+        body: 'Calling `.unwrap()` in production Rust code panics the thread if the `Result` is `Err` or `Option` is `None`. Use the `?` operator for error propagation, or handle missing values with `.unwrap_or_default()` / `.context(...)`.',
+        suggestionCode: replaced !== line ? replaced : line.replace(/\.unwrap\(\)/, '.unwrap_or_default()'),
+      };
+    },
+  },
+  {
+    id: 'rust-unsafe-block',
+    title: 'Rust `unsafe` block without explicit `// SAFETY:` invariant documentation',
+    severity: 'suggestion',
+    category: 'maintainability',
+    matchLine: (line, file, contextLines) =>
+      file.language === 'Rust' &&
+      /\bunsafe\s*\{/.test(line) &&
+      !contextLines.some((c) => /SAFETY:/i.test(c)),
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      return {
+        body: 'Rust `unsafe` blocks bypass compiler safety guarantees. Follow standard Rust API guidelines by documenting exact safety preconditions with a `// SAFETY: <justification>` comment.',
+        suggestionCode: `${indent}// SAFETY: Pointer is non-null and properly aligned\n${line}`,
+      };
+    },
+  },
+  // =========================================================================
+  // Java / Kotlin Rules
+  // =========================================================================
+  {
+    id: 'java-sql-injection',
+    title: 'Java / Kotlin SQL Injection via raw string concatenation',
+    severity: 'critical',
+    category: 'security',
+    matchLine: (line, file) =>
+      (file.language.includes('Java') || file.language.includes('Kotlin')) &&
+      /(?:executeQuery|executeUpdate|createStatement|createQuery)\s*\(.*(?:\+\s*[a-zA-Z0-9_.]+|\$\{[a-zA-Z0-9_.]+\})/i.test(
+        line
+      ),
+    buildFinding: (line) => {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      return {
+        body: 'Concatenating variables into SQL or HQL queries causes **SQL Injection (CWE-89)**. Use `PreparedStatement` with parameterized placeholders (`?`) or named parameters (`:id`).',
+        suggestionCode: `${indent}// Use PreparedStatement: conn.prepareStatement("SELECT ... WHERE id = ?"); pstmt.setString(1, id);`,
+      };
+    },
+  },
+  // =========================================================================
+  // Shell / Bash Rules
+  // =========================================================================
+  {
+    id: 'sh-missing-strict-mode',
+    title: 'Shell script missing `set -euo pipefail` strict mode',
+    severity: 'suggestion',
+    category: 'maintainability',
+    matchLine: (line, file, contextLines) =>
+      file.language === 'Shell' &&
+      line.startsWith('#!') &&
+      !contextLines.some((c) => /set\s+-(?:euo\s+pipefail|e)/.test(c)),
+    buildFinding: (line) => ({
+      body: 'Shell scripts should specify `set -euo pipefail` to ensure the script exits immediately on errors, handles unset variables safely, and does not ignore pipeline step failures.',
+      suggestionCode: `${line}\nset -euo pipefail`,
+    }),
+  },
 ];
 
 /**
