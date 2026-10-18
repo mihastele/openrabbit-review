@@ -786,6 +786,10 @@
         simulated_diff: tpl.diff,
       }),
     });
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  });
+
   document.getElementById('btnSimBitbucketPR')?.addEventListener('click', async () => {
     const out = document.getElementById('webhookSimResult');
     out.textContent = 'Dispatching POST /api/webhooks/bitbucket (X-Event-Key: pullrequest:created)...';

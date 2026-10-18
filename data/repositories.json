@@ -1,5 +1,29 @@
 [
   {
+    "id": "repo_ce9ca4740505",
+    "name": "mihastele/expenses-planner-lite",
+    "path": "D:\\development\\opensource\\expenses_planner",
+    "branch": "main",
+    "remoteUrl": "git@github.com:mihastele/expenses-planner-lite.git",
+    "isClean": true,
+    "headSha": "cef577bc3a6b1530d39f1322ab7ac3e0104d156d",
+    "lastCommitMessage": "Init",
+    "lastCommitDate": "2025-12-13T21:29:43+01:00",
+    "addedAt": "2026-10-18T16:11:41.957Z"
+  },
+  {
+    "id": "repo_97dee939c7e8",
+    "name": "mihastele/arduino-libraries-wcx",
+    "path": "D:\\development\\opensource\\arduino-libraries-wcx",
+    "branch": "main",
+    "remoteUrl": "git@github.com:mihastele/arduino-libraries-wcx.git",
+    "isClean": true,
+    "headSha": "a0819a5c1899f4791290bef800f0b032effe65c7",
+    "lastCommitMessage": "Fix watchdog",
+    "lastCommitDate": "2026-03-11T22:05:54+01:00",
+    "addedAt": "2026-10-18T16:09:51.030Z"
+  },
+  {
     "id": "repo_943c1b04d219",
     "name": "mihastele/openrabbit-review",
     "path": "D:\\development\\opensource\\openRabbit",
