@@ -18,6 +18,11 @@ import {
 import { getProvidersStatus } from '../core/llm-provider.js';
 import { renderEffortBar } from '../core/markdown-formatter.js';
 import { runPullRequestReview } from '../core/review-engine.js';
+import {
+  getAllBuiltinRulesCatalog,
+  loadRulesFromFile,
+  testCustomRule,
+} from '../core/custom-rules/index.js';
 import { runBitbucketOnDemandReview } from '../integrations/bitbucket.js';
 import {
   postGitHubInlineReview,
@@ -347,6 +352,112 @@ async function runCli(): Promise<void> {
     }
   }
 
+  // ========================================================================
+  // Rules Management Subcommand (Built-in + Custom Schema v1)
+  // ========================================================================
+  if (command === 'rules') {
+    const sub = argv[1] || 'list';
+    if (sub === 'list') {
+      const builtin = getAllBuiltinRulesCatalog();
+      const { config } = loadConfig(process.cwd());
+      const custom = config.static_analysis?.customRules || [];
+
+      console.log(
+        `${ANSI.orange}${ANSI.bold}🐇 OpenRabbit Static Rules Catalog (Built-in + Custom Schema v1)${ANSI.reset}\n`
+      );
+      console.log(
+        `${ANSI.bold}${ANSI.cyan}📦 Built-in Static Analysis Rules (${builtin.length}):${ANSI.reset}`
+      );
+      for (const b of builtin) {
+        const sevColor =
+          b.severity === 'critical'
+            ? ANSI.red
+            : b.severity === 'warning'
+            ? ANSI.yellow
+            : ANSI.cyan;
+        console.log(
+          `  ${ANSI.bold}${b.id}${ANSI.reset} [${sevColor}${b.severity.toUpperCase()}${ANSI.reset}] (${b.category}) · Lang: ${b.languages.join(', ')}`
+        );
+        console.log(`    ${ANSI.dim}${b.title}${ANSI.reset}`);
+      }
+
+      console.log(
+        `\n${ANSI.bold}${ANSI.green}🛠️ Custom Rules (${custom.length}) [Schema v1]:${ANSI.reset}`
+      );
+      if (custom.length === 0) {
+        console.log(
+          `  ${ANSI.dim}No custom rules configured yet. Create one via Web GUI or add to .openrabbit-rules.json${ANSI.reset}\n`
+        );
+      } else {
+        for (const c of custom) {
+          const sevColor =
+            c.severity === 'critical'
+              ? ANSI.red
+              : c.severity === 'warning'
+              ? ANSI.yellow
+              : ANSI.cyan;
+          console.log(
+            `  ${ANSI.bold}${c.id}${ANSI.reset} [${sevColor}${c.severity.toUpperCase()}${ANSI.reset}] (${c.category}) · Lang: ${c.languages.join(', ')}`
+          );
+          console.log(`    ${ANSI.dim}${c.title}${ANSI.reset}`);
+          console.log(`    ${ANSI.gray}Pattern: ${c.rule.pattern}${ANSI.reset}`);
+        }
+        console.log('');
+      }
+      return;
+    }
+
+    if (sub === 'test') {
+      const ruleId = typeof flags.rule === 'string' ? flags.rule : '';
+      const snippet =
+        typeof flags.snippet === 'string'
+          ? flags.snippet
+          : typeof flags.code === 'string'
+          ? flags.code
+          : '';
+      if (!snippet) {
+        console.error(
+          `${ANSI.red}Please provide code snippet using --snippet "<code to test>"${ANSI.reset}`
+        );
+        return;
+      }
+      const { config } = loadConfig(process.cwd());
+      const customRules = config.static_analysis?.customRules || [];
+      const targetRule = customRules.find((r) => r.id === ruleId) || customRules[0];
+      if (!targetRule) {
+        console.error(
+          `${ANSI.red}Rule '${ruleId || '(first rule)'}' not found in custom rules.${ANSI.reset}`
+        );
+        return;
+      }
+
+      try {
+        const result = testCustomRule(targetRule, snippet);
+        console.log(
+          `\n${ANSI.bold}Test Result for ${ANSI.cyan}${targetRule.id}${ANSI.reset}: ${
+            result.matched
+              ? `${ANSI.green}${ANSI.bold}MATCHED (${result.matchesCount})${ANSI.reset}`
+              : `${ANSI.yellow}NO MATCH${ANSI.reset}`
+          }\n`
+        );
+        if (result.matched) {
+          for (const m of result.matches) {
+            console.log(`  Line ${m.lineNumber}: ${m.lineContent}`);
+            if (m.suggestionCode) {
+              console.log(
+                `  ${ANSI.green}Suggestion:${ANSI.reset} ${m.suggestionCode}`
+              );
+            }
+          }
+          console.log('');
+        }
+      } catch (err) {
+        console.error(`${ANSI.red}Rule test error:${ANSI.reset}`, (err as Error).message);
+      }
+      return;
+    }
+  }
+
   if (command === 'review') {
     const format = String(flags.format || 'terminal');
     if (format === 'terminal') printBanner();
@@ -370,6 +481,35 @@ async function runCli(): Promise<void> {
     }
     if (typeof flags.model === 'string') {
       config.llm.model = flags.model;
+    }
+    if (typeof flags.reviewer === 'string') {
+      config.reviewer = flags.reviewer as any;
+    }
+    if (typeof flags['static-mode'] === 'string') {
+      if (!config.static_analysis) {
+        config.static_analysis = {
+          enabled: true,
+          builtinRules: { mode: 'all' },
+          customRules: [],
+        };
+      }
+      config.static_analysis.builtinRules.mode = flags['static-mode'] as any;
+    }
+    if (typeof flags.rules === 'string') {
+      const loaded = loadRulesFromFile(path.resolve(flags.rules));
+      if (loaded.rules.length > 0) {
+        if (!config.static_analysis) {
+          config.static_analysis = {
+            enabled: true,
+            builtinRules: { mode: 'all' },
+            customRules: [],
+          };
+        }
+        config.static_analysis.customRules = [
+          ...(config.static_analysis.customRules || []),
+          ...loaded.rules,
+        ];
+      }
     }
 
     // 1. Live GitHub on-demand review

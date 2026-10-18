@@ -1,0 +1,65 @@
+{
+  "$schema": "https://openrabbit.dev/schema/rules/v1.json",
+  "schemaVersion": "v1",
+  "name": "OpenRabbit Team Rules",
+  "description": "Custom static analysis rules and architectural policies for code review (Schema v1)",
+  "rules": [
+    {
+      "schemaVersion": "v1",
+      "id": "team-no-console-log",
+      "title": "Avoid raw console.log in production modules",
+      "description": "Direct console.log statements pollute standard output and can leak sensitive payload data. Use the structured logger (logger.info or logger.debug) instead.",
+      "severity": "suggestion",
+      "category": "maintainability",
+      "languages": ["typescript", "javascript"],
+      "fileExtensions": ["ts", "tsx", "js", "jsx", "mjs"],
+      "pathFilter": "!**/*.test.*",
+      "rule": {
+        "type": "regex",
+        "pattern": "\\bconsole\\.(?:log|debug|info)\\s*\\(",
+        "flags": "i",
+        "suggestionTemplate": "logger.info("
+      },
+      "enabled": true,
+      "tags": ["style", "logging"],
+      "author": "OpenRabbit Community"
+    },
+    {
+      "schemaVersion": "v1",
+      "id": "sec-no-insecure-http",
+      "title": "Insecure plaintext HTTP URL in service communication",
+      "description": "Transmitting data over unencrypted HTTP exposes credentials and traffic to man-in-the-middle (MITM) interception. Enforce HTTPS for remote endpoints.",
+      "severity": "warning",
+      "category": "security",
+      "languages": ["*"],
+      "rule": {
+        "type": "regex",
+        "pattern": "['\"]http:\\/\\/(?!localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)[a-zA-Z0-9_.-]+",
+        "flags": "i",
+        "notPattern": "http:\\/\\/schemas\\.|http:\\/\\/www\\.w3\\.org",
+        "suggestionTemplate": "https://"
+      },
+      "enabled": true,
+      "tags": ["security", "network", "encryption"]
+    },
+    {
+      "schemaVersion": "v1",
+      "id": "perf-no-sync-fs",
+      "title": "Blocking synchronous filesystem call in async execution path",
+      "description": "Synchronous filesystem methods (readFileSync, writeFileSync) block Node.js event loop threads, hurting server throughput and scalability. Prefer fs.promises or asynchronous counterparts.",
+      "severity": "warning",
+      "category": "performance",
+      "languages": ["typescript", "javascript"],
+      "fileExtensions": ["ts", "tsx", "js", "mjs"],
+      "pathFilter": "!**/*.test.*",
+      "rule": {
+        "type": "regex",
+        "pattern": "\\bfs\\.(?:readFileSync|writeFileSync|existsSync)\\s*\\(",
+        "flags": "i",
+        "suggestionTemplate": "await fs.promises.readFile("
+      },
+      "enabled": true,
+      "tags": ["performance", "node"]
+    }
+  ]
+}

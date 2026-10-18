@@ -36,7 +36,7 @@
           <span>📊</span> Reviews &amp; Analytics
         </button>
         <button class="nav-tab" data-tab="rules" role="tab">
-          <span>⚙️</span> <code>.openrabbit.yaml</code> Studio
+          <span>🛠️</span> Custom Reviewer &amp; Rules
         </button>
         <button class="nav-tab" data-tab="webhooks" role="tab">
           <span>🔌</span> Webhooks &amp; Integrations
@@ -107,6 +107,16 @@
 
           <div class="form-row-2">
             <div>
+              <label class="field-label" for="selectReviewerMode">Reviewer Engine Option</label>
+              <select id="selectReviewerMode" class="input">
+                <option value="hybrid">✨ Hybrid (LLM + Built-in Static)</option>
+                <option value="custom">🛠️ Custom Reviewer (Configurable Static + LLM)</option>
+                <option value="static-only">🎯 Custom Static Only (Your Rules + Selected Subset)</option>
+                <option value="builtin-static">⚡ Built-in Static Only</option>
+                <option value="llm-only">🤖 LLM Only (No Static Rules)</option>
+              </select>
+            </div>
+            <div>
               <label class="field-label" for="selectProfile">Review Profile</label>
               <select id="selectProfile" class="input">
                 <option value="assertive">🔥 Assertive (Thorough + Nitpicks)</option>
@@ -114,6 +124,9 @@
                 <option value="security-focused">🛡️ Security-Focused</option>
               </select>
             </div>
+          </div>
+
+          <div class="form-row-2">
             <div>
               <label class="field-label" for="selectProvider">LLM Provider (BYOK)</label>
               <select id="selectProvider" class="input">
@@ -124,6 +137,9 @@
                 <option value="gemini">Google (Gemini 2.5 Pro)</option>
                 <option value="ollama">Ollama (Local Private)</option>
               </select>
+            </div>
+            <div style="display: flex; align-items: flex-end; padding-bottom: 6px;">
+              <a href="#" class="link-subtle" id="linkConfigureCustomRules">🛠️ Configure Custom Rules &amp; Reviewer →</a>
             </div>
           </div>
 
@@ -398,68 +414,383 @@
     </main>
 
     <!-- ================================================================== -->
-    <!-- TAB 4: .OPENRABBIT.YAML RULE STUDIO & BYOK LLM CONFIG              -->
+    <!-- TAB 4: CUSTOM REVIEWER & STATIC RULES STUDIO (SCHEMA V1)           -->
     <!-- ================================================================== -->
     <main id="tab-rules" class="tab-panel">
-      <div class="rules-grid">
+      <!-- Top Overview Header -->
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="card-header" style="flex-wrap: wrap; gap: 12px;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <h2>🛠️ Custom Reviewer &amp; Static Rules Studio</h2>
+              <span class="schema-pill">Schema: v1</span>
+            </div>
+            <p class="card-subtitle">
+              Combine LLM reasoning with custom deterministic static analysis rules.
+              Include all built-in rules, pick an exact subset, or code team-specific rules in the GUI or file.
+            </p>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn btn-primary btn-sm" id="btnOpenNewRuleModal">➕ Add Custom Rule</button>
+            <button class="btn btn-secondary btn-sm" id="btnLoadStarterRules">✨ Load Starter Rules</button>
+            <button class="btn btn-secondary btn-sm" id="btnExportRules">📤 Export JSON (v1)</button>
+            <button class="btn btn-secondary btn-sm" id="btnImportRules">📥 Import Rules</button>
+            <input type="file" id="fileRulesImport" accept=".json,.yaml,.yml" class="hidden" />
+          </div>
+        </div>
+
+        <!-- Reviewer Mode & Static Analysis Config Row -->
+        <div class="form-row-2" style="background: var(--bg-elevated); padding: 16px; border-radius: 8px; border: 1px solid var(--border-subtle); margin-top: 10px;">
+          <div>
+            <label class="field-label" for="rulesCfgReviewerMode">Reviewer Engine Mode</label>
+            <select id="rulesCfgReviewerMode" class="input">
+              <option value="hybrid">✨ Hybrid (LLM + Built-in Static Rules)</option>
+              <option value="custom">🛠️ Custom Reviewer (Configurable Static Rules + LLM)</option>
+              <option value="static-only">🎯 Custom Static Only (Your Rules + Selected Subset)</option>
+              <option value="llm-only">🤖 LLM Only (No Static Analysis)</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="rulesCfgBuiltinMode">Built-in Static Rules Mode</label>
+            <select id="rulesCfgBuiltinMode" class="input">
+              <option value="all">Include All Built-in Rules (Security, Async, Leak Audits)</option>
+              <option value="subset">Include Only Selected Subset of Built-in Rules</option>
+              <option value="none">None (Only Evaluate User Custom Rules)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row-2" style="margin-top: 12px;">
+          <div>
+            <label class="field-label" for="rulesCfgMinSeverity">Minimum Rule Severity to Report</label>
+            <select id="rulesCfgMinSeverity" class="input">
+              <option value="nitpick">All (Critical, Warning, Suggestion, Nitpick)</option>
+              <option value="suggestion">Suggestions and above (Suggestion, Warning, Critical)</option>
+              <option value="warning">Warnings and above (Warning, Critical)</option>
+              <option value="critical">Critical Only (High-risk vulnerabilities only)</option>
+            </select>
+          </div>
+          <div style="display: flex; align-items: flex-end;">
+            <button class="btn btn-primary btn-block" id="btnSaveReviewerSettings">
+              💾 Save Reviewer &amp; Static Settings
+            </button>
+          </div>
+        </div>
+        <div id="rulesConfigToast" class="save-toast hidden" style="margin-top: 10px;"></div>
+      </div>
+
+      <!-- Studio Navigation Subtabs -->
+      <div class="rules-subnav">
+        <button class="rules-subnav-btn active" data-subtab="custom-rules">
+          🛠️ Custom Rules (<span id="customRulesCountBadge">0</span>)
+        </button>
+        <button class="rules-subnav-btn" data-subtab="tester">
+          🧪 Interactive Live Rule Tester
+        </button>
+        <button class="rules-subnav-btn" data-subtab="builtin-catalog">
+          📦 Built-in Rules Catalog &amp; Subset (<span id="builtinRulesCountBadge">0</span>)
+        </button>
+        <button class="rules-subnav-btn" data-subtab="yaml-editor">
+          ⚙️ Raw <code>.openrabbit.yaml</code> &amp; Providers
+        </button>
+      </div>
+
+      <!-- SUBTAB 1: CUSTOM RULES TABLE (SCHEMA V1) -->
+      <div id="subtab-custom-rules" class="subtab-panel active">
         <div class="card">
           <div class="card-header">
             <div>
-              <h2>⚙️ Visual <code>.openrabbit.yaml</code> Configurator</h2>
-              <p class="card-subtitle">Compatible with <code>.openrabbit.yaml</code> and <code>.coderabbit.yaml</code> schemas</p>
+              <h3>📋 Active Custom Static Analysis Rules</h3>
+              <p class="card-subtitle">User-defined rules conforming to OpenRabbit Schema v1 with regex patterns and committable autofix suggestions.</p>
             </div>
-            <button class="btn btn-primary btn-sm" id="btnSaveYamlConfig">💾 Save to .openrabbit.yaml</button>
+            <div id="customRulesSummaryText" class="mono-hint">0 rules loaded</div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="custom-rules-table" id="customRulesTable">
+              <thead>
+                <tr>
+                  <th style="width: 50px;">Status</th>
+                  <th>Rule ID &amp; Headline</th>
+                  <th>Severity</th>
+                  <th>Category</th>
+                  <th>Languages</th>
+                  <th>Match Pattern</th>
+                  <th style="width: 140px; text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="customRulesTableBody">
+                <tr>
+                  <td colspan="7" class="empty-state">Loading custom rules...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- SUBTAB 2: INTERACTIVE LIVE RULE TESTER SANDBOX -->
+      <div id="subtab-tester" class="subtab-panel hidden">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3>🧪 Interactive Live Rule Sandbox</h3>
+              <p class="card-subtitle">Test any custom or built-in static analysis rule against code or diff snippets with immediate visual feedback.</p>
+            </div>
           </div>
 
           <div class="form-row-2">
             <div>
-              <label class="field-label" for="cfgProfile">Default Review Profile</label>
-              <select id="cfgProfile" class="input">
-                <option value="chill">chill (Suppress nitpicks, focus on bugs)</option>
-                <option value="assertive">assertive (Comprehensive review)</option>
-                <option value="security-focused">security-focused (Strict OWASP/CWE audit)</option>
+              <label class="field-label" for="selectTestRule">Select Rule to Test</label>
+              <select id="selectTestRule" class="input">
+                <option value="">Select a rule...</option>
               </select>
             </div>
             <div>
-              <label class="field-label" for="cfgProvider">Default LLM Provider</label>
-              <select id="cfgProvider" class="input">
-                <option value="auto">auto</option>
-                <option value="openai">openai</option>
-                <option value="anthropic">anthropic</option>
-                <option value="gemini">gemini</option>
-                <option value="ollama">ollama</option>
-                <option value="heuristic">heuristic</option>
-              </select>
+              <label class="field-label" for="inputTestFilePath">Simulated File Path</label>
+              <input type="text" id="inputTestFilePath" class="input" value="src/controllers/user-controller.ts" />
             </div>
           </div>
 
           <div style="margin-top: 12px;">
-            <label class="field-label" for="cfgTone">Custom Tone &amp; Reviewer Instructions</label>
-            <input type="text" id="cfgTone" class="input" />
+            <label class="field-label" for="textareaTestSnippet">Code Snippet or Diff Line</label>
+            <textarea id="textareaTestSnippet" class="diff-textarea" style="height: 160px;" placeholder="Paste sample code or diff lines here to test if the rule matches..."></textarea>
           </div>
 
-          <div class="checkbox-row">
-            <label><input type="checkbox" id="cfgHighLevelSummary" checked /> High-Level Summary</label>
-            <label><input type="checkbox" id="cfgSequenceDiagrams" checked /> Mermaid Sequence Diagrams</label>
-            <label><input type="checkbox" id="cfgPoem" checked /> Rabbit Poem</label>
-            <label><input type="checkbox" id="cfgCollapseWalkthrough" /> Collapse Walkthrough by Default</label>
+          <div style="margin-top: 12px; display: flex; gap: 8px;">
+            <button class="btn btn-primary" id="btnExecuteRuleTest">
+              ⚡ Test Rule Against Snippet
+            </button>
+            <button class="btn btn-secondary" id="btnTestLoadSampleCode">
+              Load Sample Snippet
+            </button>
           </div>
 
-          <div style="margin-top: 16px;">
-            <label class="field-label" for="textareaYamlConfig">Raw <code>.openrabbit.yaml</code> Configuration</label>
-            <textarea id="textareaYamlConfig" class="diff-textarea" style="height: 310px;" spellcheck="false"></textarea>
+          <div id="ruleTestResultBox" class="sandbox-test-box hidden">
+            <div id="ruleTestStatusBadge"></div>
+            <div id="ruleTestMatchDetails" style="margin-top: 10px;"></div>
           </div>
-          <div id="configSaveStatus" class="save-toast hidden"></div>
         </div>
+      </div>
 
+      <!-- SUBTAB 3: BUILT-IN RULES CATALOG & SUBSET PICKER -->
+      <div id="subtab-builtin-catalog" class="subtab-panel hidden">
         <div class="card">
-          <div class="card-header">
-            <h2>🔑 Multi-Provider BYOK LLM Status</h2>
+          <div class="card-header" style="flex-wrap: wrap; gap: 12px;">
+            <div>
+              <h3>📦 Built-in Static Analysis Rules Catalog</h3>
+              <p class="card-subtitle">Cross-language security rules and strategy rules across 12 languages. Select checkboxes to configure your custom subset.</p>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary btn-xs" id="btnSelectAllBuiltinRules">Select All</button>
+              <button class="btn btn-secondary btn-xs" id="btnDeselectAllBuiltinRules">Deselect All</button>
+              <button class="btn btn-primary btn-xs" id="btnSaveBuiltinSubset">Save Subset</button>
+            </div>
           </div>
-          <div id="providersListContainer" class="providers-list"></div>
+
+          <div class="filter-bar">
+            <input type="text" id="inputSearchBuiltinRules" class="input input-sm" placeholder="🔍 Search rules by name, ID, or description..." style="flex: 2; min-width: 200px;" />
+            <select id="filterBuiltinCategory" class="input input-sm" style="flex: 1; min-width: 130px;">
+              <option value="">All Categories</option>
+              <option value="security">security</option>
+              <option value="bug">bug</option>
+              <option value="performance">performance</option>
+              <option value="maintainability">maintainability</option>
+            </select>
+            <select id="filterBuiltinSeverity" class="input input-sm" style="flex: 1; min-width: 130px;">
+              <option value="">All Severities</option>
+              <option value="critical">critical</option>
+              <option value="warning">warning</option>
+              <option value="suggestion">suggestion</option>
+              <option value="nitpick">nitpick</option>
+            </select>
+          </div>
+
+          <div class="table-wrap">
+            <table class="custom-rules-table" id="builtinRulesTable">
+              <thead>
+                <tr>
+                  <th style="width: 40px;">Active</th>
+                  <th>Rule ID</th>
+                  <th>Rule Title &amp; Description</th>
+                  <th>Severity</th>
+                  <th>Category</th>
+                  <th>Target Languages</th>
+                </tr>
+              </thead>
+              <tbody id="builtinRulesTableBody">
+                <tr>
+                  <td colspan="6" class="empty-state">Loading built-in rules catalog...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- SUBTAB 4: RAW YAML & PROVIDERS -->
+      <div id="subtab-yaml-editor" class="subtab-panel hidden">
+        <div class="rules-grid">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2>⚙️ Visual <code>.openrabbit.yaml</code> Configurator</h2>
+                <p class="card-subtitle">Compatible with <code>.openrabbit.yaml</code> and <code>.coderabbit.yaml</code> schemas</p>
+              </div>
+              <button class="btn btn-primary btn-sm" id="btnSaveYamlConfig">💾 Save to .openrabbit.yaml</button>
+            </div>
+
+            <div class="form-row-2">
+              <div>
+                <label class="field-label" for="cfgProfile">Default Review Profile</label>
+                <select id="cfgProfile" class="input">
+                  <option value="chill">chill (Suppress nitpicks, focus on bugs)</option>
+                  <option value="assertive">assertive (Comprehensive review)</option>
+                  <option value="security-focused">security-focused (Strict OWASP/CWE audit)</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label" for="cfgProvider">Default LLM Provider</label>
+                <select id="cfgProvider" class="input">
+                  <option value="auto">auto</option>
+                  <option value="openai">openai</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="gemini">gemini</option>
+                  <option value="ollama">ollama</option>
+                  <option value="heuristic">heuristic</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="margin-top: 12px;">
+              <label class="field-label" for="cfgTone">Custom Tone &amp; Reviewer Instructions</label>
+              <input type="text" id="cfgTone" class="input" />
+            </div>
+
+            <div class="checkbox-row">
+              <label><input type="checkbox" id="cfgHighLevelSummary" checked /> High-Level Summary</label>
+              <label><input type="checkbox" id="cfgSequenceDiagrams" checked /> Mermaid Sequence Diagrams</label>
+              <label><input type="checkbox" id="cfgPoem" checked /> Rabbit Poem</label>
+              <label><input type="checkbox" id="cfgCollapseWalkthrough" /> Collapse Walkthrough by Default</label>
+            </div>
+
+            <div style="margin-top: 16px;">
+              <label class="field-label" for="textareaYamlConfig">Raw <code>.openrabbit.yaml</code> Configuration</label>
+              <textarea id="textareaYamlConfig" class="diff-textarea" style="height: 310px;" spellcheck="false"></textarea>
+            </div>
+            <div id="configSaveStatus" class="save-toast hidden"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>🔑 Multi-Provider BYOK LLM Status</h2>
+            </div>
+            <div id="providersListContainer" class="providers-list"></div>
+          </div>
         </div>
       </div>
     </main>
+
+    <!-- ================================================================== -->
+    <!-- CUSTOM RULE CREATE / EDIT MODAL (SCHEMA V1)                        -->
+    <!-- ================================================================== -->
+    <div id="modalCustomRule" class="rule-modal-backdrop hidden">
+      <div class="rule-modal">
+        <div class="rule-modal-header">
+          <div>
+            <h3 id="ruleModalTitle">➕ Define Custom Static Analysis Rule</h3>
+            <span class="schema-pill" style="margin-top: 4px;">Schema Version: v1</span>
+          </div>
+          <button class="btn btn-secondary btn-xs" id="btnCloseRuleModal">✕</button>
+        </div>
+
+        <form id="formCustomRule">
+          <div class="form-row-2">
+            <div>
+              <label class="field-label" for="ruleInputId">Rule ID <span style="color:#f87171;">*</span></label>
+              <input type="text" id="ruleInputId" class="input" placeholder="e.g. sec-no-eval or team-prefer-async" required />
+            </div>
+            <div>
+              <label class="field-label" for="ruleInputTitle">Headline / Title <span style="color:#f87171;">*</span></label>
+              <input type="text" id="ruleInputTitle" class="input" placeholder="e.g. Disallow unsafe dynamic eval()" required />
+            </div>
+          </div>
+
+          <div class="form-row-2" style="margin-top: 10px;">
+            <div>
+              <label class="field-label" for="ruleInputSeverity">Importance / Severity <span style="color:#f87171;">*</span></label>
+              <select id="ruleInputSeverity" class="input">
+                <option value="critical">🔴 critical</option>
+                <option value="warning" selected>🟡 warning</option>
+                <option value="suggestion">🔵 suggestion</option>
+                <option value="nitpick">⚪ nitpick</option>
+                <option value="praise">🟢 praise</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="ruleInputCategory">Category <span style="color:#f87171;">*</span></label>
+              <select id="ruleInputCategory" class="input">
+                <option value="security">security</option>
+                <option value="bug" selected>bug</option>
+                <option value="performance">performance</option>
+                <option value="maintainability">maintainability</option>
+                <option value="type-safety">type-safety</option>
+                <option value="logic">logic</option>
+                <option value="architecture">architecture</option>
+                <option value="testing">testing</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row-2" style="margin-top: 10px;">
+            <div>
+              <label class="field-label" for="ruleInputLanguages">Target Languages (comma-separated or * for all) <span style="color:#f87171;">*</span></label>
+              <input type="text" id="ruleInputLanguages" class="input" value="typescript, javascript" placeholder="e.g. typescript, python, go, * " required />
+            </div>
+            <div>
+              <label class="field-label" for="ruleInputPathFilter">Path Filter Glob (Optional)</label>
+              <input type="text" id="ruleInputPathFilter" class="input" placeholder="e.g. src/** or !**/*.test.*" />
+            </div>
+          </div>
+
+          <div class="form-row-2" style="margin-top: 10px;">
+            <div>
+              <label class="field-label" for="ruleInputPattern">Regex Match Pattern <span style="color:#f87171;">*</span></label>
+              <input type="text" id="ruleInputPattern" class="input" placeholder="e.g. \\beval\\s*\\(" required />
+            </div>
+            <div>
+              <label class="field-label" for="ruleInputNotPattern">Negative Match (Exclude false positives)</label>
+              <input type="text" id="ruleInputNotPattern" class="input" placeholder="e.g. // safe-eval-ok" />
+            </div>
+          </div>
+
+          <div style="margin-top: 10px;">
+            <label class="field-label" for="ruleInputDescription">Detailed Description &amp; Rationale (Markdown allowed) <span style="color:#f87171;">*</span></label>
+            <textarea id="ruleInputDescription" class="diff-textarea" style="height: 80px;" placeholder="Explain why this rule matters, potential runtime/security failure modes, and remediation advice..." required></textarea>
+          </div>
+
+          <div style="margin-top: 10px;">
+            <label class="field-label" for="ruleInputSuggestion">Committable Suggestion Template (Optional)</label>
+            <input type="text" id="ruleInputSuggestion" class="input" placeholder="e.g. JSON.parse( or https://" />
+          </div>
+
+          <div style="margin-top: 12px; display: flex; align-items: center; gap: 8px;">
+            <label class="rule-toggle-switch">
+              <input type="checkbox" id="ruleInputEnabled" checked />
+              <span class="toggle-slider"></span>
+            </label>
+            <span>Rule Enabled in Active Reviews</span>
+          </div>
+
+          <div id="ruleModalError" class="save-toast error hidden" style="margin-top: 12px;"></div>
+
+          <div class="rule-modal-footer">
+            <button type="button" class="btn btn-secondary" id="btnCancelRuleModal">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="btnSaveCustomRule">💾 Save Rule (Schema v1)</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- ================================================================== -->
     <!-- TAB 5: WEBHOOK SIMULATOR & CI/CD INTEGRATIONS                      -->

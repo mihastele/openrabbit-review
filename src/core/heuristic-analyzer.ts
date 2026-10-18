@@ -10,110 +10,18 @@ import type {
 } from '../types/index.js';
 import { inferComponentName } from './diff-parser.js';
 import { LanguageRegistry, type LanguageRule } from './languages/index.js';
+import {
+  GLOBAL_SECURITY_RULES,
+  filterBuiltinRules,
+  evaluateCustomRules,
+} from './custom-rules/index.js';
 
-/**
- * Universal cross-language security and reliability rules that apply
- * across all languages (secrets, raw dynamic execution, unparameterized SQL).
- */
-const GLOBAL_SECURITY_RULES: LanguageRule[] = [
-  {
-    id: 'sec-hardcoded-secret',
-    title: 'Hardcoded secret or API credential detected',
-    severity: 'critical',
-    category: 'security',
-    matchLine: (line, file) =>
-      !file.newPath.includes('.example') &&
-      !file.newPath.includes('test') &&
-      /(?:api[_-]?key|secret|password|private[_-]?key|jwt[_-]?secret|token)\s*[:=]\s*['"][A-Za-z0-9_\-./+=]{12,}['"]/i.test(
-        line
-      ),
-    buildFinding: (line) => {
-      const replaced = line.replace(
-        /(['"])[A-Za-z0-9_\-./+=]{12,}\1/,
-        'process.env.SECRET_KEY ?? ""'
-      );
-      return {
-        body: 'Hardcoding secrets or API tokens in source code risks credential leakage in git history and build artifacts (**CWE-798**). Load this value from an environment variable or secret manager and fail fast if it is missing.',
-        suggestionCode: replaced,
-      };
-    },
-  },
-  {
-    id: 'sec-eval-exec',
-    title: 'Unsafe dynamic code execution (`eval` / `child_process.exec`)',
-    severity: 'critical',
-    category: 'security',
-    matchLine: (line) =>
-      /\beval\s*\(/.test(line) ||
-      /\bexec(?:Sync)?\s*\(\s*`[^`]*\$\{/.test(line),
-    buildFinding: (line) => {
-      const indent = line.match(/^\s*/)?.[0] || '';
-      return {
-        body: 'Dynamic execution of unsanitized strings via `eval()` or shell-interpolated `exec()` allows arbitrary code or command injection (**CWE-78 / CWE-95**). Prefer structured execution with an explicit argument array or structured JSON deserialization.',
-        suggestionCode: line.includes('eval(')
-          ? line.replace(/\beval\s*\(/, 'JSON.parse(')
-          : `${indent}// Prefer execFile(cmd, [arg1, arg2]) over shell string interpolation`,
-      };
-    },
-  },
-  {
-    id: 'sec-sql-injection',
-    title: 'Potential SQL Injection via string interpolation',
-    severity: 'critical',
-    category: 'security',
-    matchLine: (line) =>
-      /(?:SELECT|INSERT|UPDATE|DELETE)\b.*(?:\$\{|['"]\s*\+\s*[a-zA-Z0-9_$.]+)/i.test(
-        line
-      ),
-    buildFinding: (line) => {
-      const indent = line.match(/^\s*/)?.[0] || '';
-      const parameterized = line.replace(/`([^`]*)`/, (_m, inner: string) => {
-        let idx = 1;
-        const params: string[] = [];
-        const sql = inner.replace(
-          /'?\$\{([^}]+)\}'?/g,
-          (_: string, expr: string) => {
-            params.push(expr.trim());
-            return `$${idx++}`;
-          }
-        );
-        return params.length > 0
-          ? `\`${sql}\`, [${params.join(', ')}]`
-          : `\`${inner}\``;
-      });
-
-      return {
-        body: 'Interpolating user-controlled values directly into a raw SQL query exposes the database to **SQL Injection (CWE-89)**. Use parameterized queries or prepared statements with bound placeholders (`$1`, `?`) instead.',
-        suggestionCode:
-          parameterized !== line
-            ? parameterized
-            : `${indent}// Use parameterized query placeholders ($1) instead of string interpolation`,
-      };
-    },
-  },
-  {
-    id: 'bug-empty-catch',
-    title: 'Empty or silent `catch` block swallows runtime exceptions',
-    severity: 'warning',
-    category: 'bug',
-    matchLine: (line, _file, contextLines) => {
-      if (!/\bcatch\b/.test(line)) return false;
-      const joined = contextLines.join(' ');
-      return /catch\s*(?:\([^)]*\))?\s*\{\s*\}/.test(joined);
-    },
-    buildFinding: (line) => {
-      const indent = line.match(/^\s*/)?.[0] || '';
-      return {
-        body: 'Swallowing exceptions in an empty `catch` block hides unexpected failures and makes production debugging difficult. Log the error with context or rethrow a domain-specific error.',
-        suggestionCode: `${indent}} catch (error) {\n${indent}  console.error('Operation failed:', error);\n${indent}  throw error;\n${indent}}`,
-      };
-    },
-  },
-];
+export { GLOBAL_SECURITY_RULES };
 
 /**
  * Generates high-signal inline findings by combining universal global rules
- * with language-specific rules from the registered LanguageStrategy.
+ * with language-specific rules from the registered LanguageStrategy,
+ * respecting built-in rule filtering and user-defined Schema v1 custom rules.
  */
 export function runHeuristicInlineReview(
   files: FileDiff[],
@@ -123,59 +31,88 @@ export function runHeuristicInlineReview(
   const seenKeys = new Set<string>();
   const registry = LanguageRegistry.getInstance();
 
-  for (const file of files) {
-    if (file.status === 'deleted') continue;
+  const staticConfig = config.static_analysis;
+  const isStaticEnabled = staticConfig ? staticConfig.enabled !== false : true;
 
-    // Strategy Pattern: Resolve language-specific strategy rules for this file
-    const strategy = registry.getStrategyForFile(file.newPath);
-    const applicableRules: LanguageRule[] = [
-      ...GLOBAL_SECURITY_RULES,
-      ...strategy.getRules(),
-    ];
+  if (isStaticEnabled) {
+    for (const file of files) {
+      if (file.status === 'deleted') continue;
 
-    for (const hunk of file.hunks) {
-      const addedLinesWithIndex = hunk.lines
-        .map((l, idx) => ({ line: l, idx }))
-        .filter((item) => item.line.type === 'add' && item.line.newLineNumber);
+      // Strategy Pattern: Resolve language-specific strategy rules for this file
+      const strategy = registry.getStrategyForFile(file.newPath);
+      let applicableRules: LanguageRule[] = [
+        ...GLOBAL_SECURITY_RULES,
+        ...strategy.getRules(),
+      ];
 
-      for (const { line, idx } of addedLinesWithIndex) {
-        const lineNum = line.newLineNumber!;
-        const contextSlice = hunk.lines
-          .slice(Math.max(0, idx - 3), Math.min(hunk.lines.length, idx + 4))
-          .map((l) => l.content);
+      // Apply built-in rules subset/exclusion filters if configured
+      if (staticConfig?.builtinRules) {
+        applicableRules = filterBuiltinRules(
+          applicableRules,
+          staticConfig.builtinRules
+        );
+      }
 
-        for (const rule of applicableRules) {
-          // Filter nitpicks if profile is 'chill'
-          if (config.profile === 'chill' && rule.severity === 'nitpick') {
-            continue;
+      for (const hunk of file.hunks) {
+        const addedLinesWithIndex = hunk.lines
+          .map((l, idx) => ({ line: l, idx }))
+          .filter((item) => item.line.type === 'add' && item.line.newLineNumber);
+
+        for (const { line, idx } of addedLinesWithIndex) {
+          const lineNum = line.newLineNumber!;
+          const contextSlice = hunk.lines
+            .slice(Math.max(0, idx - 3), Math.min(hunk.lines.length, idx + 4))
+            .map((l) => l.content);
+
+          for (const rule of applicableRules) {
+            // Filter nitpicks if profile is 'chill'
+            if (config.profile === 'chill' && rule.severity === 'nitpick') {
+              continue;
+            }
+
+            if (rule.matchLine(line.content, file, contextSlice)) {
+              const dedupeKey = `${file.newPath}:${rule.id}:${Math.floor(lineNum / 5)}`;
+              if (seenKeys.has(dedupeKey)) continue;
+              seenKeys.add(dedupeKey);
+
+              const details = rule.buildFinding(
+                line.content,
+                lineNum,
+                file,
+                contextSlice
+              );
+
+              findings.push({
+                id: `finding-${crypto.randomUUID().slice(0, 8)}`,
+                file: file.newPath,
+                startLine: lineNum,
+                endLine: lineNum,
+                severity: rule.severity,
+                category: rule.category,
+                title: rule.title,
+                body: details.body,
+                suggestionCode: details.suggestionCode,
+                originalCode: line.content,
+                ruleMatched: rule.id,
+              });
+            }
           }
+        }
+      }
+    }
 
-          if (rule.matchLine(line.content, file, contextSlice)) {
-            const dedupeKey = `${file.newPath}:${rule.id}:${Math.floor(lineNum / 5)}`;
-            if (seenKeys.has(dedupeKey)) continue;
-            seenKeys.add(dedupeKey);
-
-            const details = rule.buildFinding(
-              line.content,
-              lineNum,
-              file,
-              contextSlice
-            );
-
-            findings.push({
-              id: `finding-${crypto.randomUUID().slice(0, 8)}`,
-              file: file.newPath,
-              startLine: lineNum,
-              endLine: lineNum,
-              severity: rule.severity,
-              category: rule.category,
-              title: rule.title,
-              body: details.body,
-              suggestionCode: details.suggestionCode,
-              originalCode: line.content,
-              ruleMatched: rule.id,
-            });
-          }
+    // Evaluate user-defined Custom Rules (Schema v1)
+    if (staticConfig?.customRules && staticConfig.customRules.length > 0) {
+      const customFindings = evaluateCustomRules(
+        files,
+        staticConfig.customRules,
+        config.profile
+      );
+      for (const cf of customFindings) {
+        const dedupeKey = `${cf.file}:${cf.ruleMatched}:${cf.startLine}`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          findings.push(cf);
         }
       }
     }

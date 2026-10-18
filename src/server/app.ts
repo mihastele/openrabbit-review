@@ -8,6 +8,12 @@ import {
   parseYamlConfig,
   serializeConfigToYaml,
 } from '../config/config-loader.js';
+import {
+  getAllBuiltinRulesCatalog,
+  testCustomRule,
+  validateCustomRuleV1,
+  STARTER_SAMPLE_CUSTOM_RULES_V1,
+} from '../core/custom-rules/index.js';
 import { handlePRChat } from '../core/chat-engine.js';
 import { parseUnifiedDiff } from '../core/diff-parser.js';
 import {
@@ -198,6 +204,19 @@ export async function createOpenRabbitServer(options: {
         if (body.model) {
           effectiveConfig.llm.model = body.model;
         }
+        if (body.reviewer) {
+          effectiveConfig.reviewer = body.reviewer;
+        }
+        if (body.staticAnalysis) {
+          effectiveConfig = mergeConfig(effectiveConfig, {
+            static_analysis: body.staticAnalysis,
+          });
+        }
+        if (Array.isArray(body.customRules)) {
+          effectiveConfig = mergeConfig(effectiveConfig, {
+            custom_rules: body.customRules,
+          });
+        }
 
         const review = await runPullRequestReview({
           rawDiff: diff,
@@ -235,7 +254,24 @@ export async function createOpenRabbitServer(options: {
           return;
         }
 
-        const { config } = loadConfig(workspaceDir);
+        const { config: baseConfig } = loadConfig(workspaceDir);
+        let effectiveConfig = structuredClone(baseConfig);
+        if (body.yamlConfig) effectiveConfig = parseYamlConfig(body.yamlConfig);
+        if (body.profile) effectiveConfig.profile = body.profile;
+        if (body.provider) effectiveConfig.llm.provider = body.provider;
+        if (body.model) effectiveConfig.llm.model = body.model;
+        if (body.reviewer) effectiveConfig.reviewer = body.reviewer;
+        if (body.staticAnalysis) {
+          effectiveConfig = mergeConfig(effectiveConfig, {
+            static_analysis: body.staticAnalysis,
+          });
+        }
+        if (Array.isArray(body.customRules)) {
+          effectiveConfig = mergeConfig(effectiveConfig, {
+            custom_rules: body.customRules,
+          });
+        }
+
         const review = await runPullRequestReview({
           rawDiff: localInfo.diff,
           prTitle: `Local Review: ${localInfo.description} (${localInfo.branch})`,
@@ -243,7 +279,7 @@ export async function createOpenRabbitServer(options: {
           author: localInfo.author,
           headBranch: localInfo.branch,
           source: 'cli',
-          config,
+          config: effectiveConfig,
         });
 
         await store.addReview(review);
@@ -306,6 +342,239 @@ export async function createOpenRabbitServer(options: {
           configPath: targetPath,
           config: updatedConfig,
           yaml: yamlString,
+        });
+        return;
+      }
+
+      // ======================================================================
+      // Custom Reviewer & Static Rules Endpoints (Schema v1)
+      // ======================================================================
+      if (pathname === '/api/rules' && req.method === 'GET') {
+        const { config, configPath } = loadConfig(workspaceDir);
+        const builtinCatalog = getAllBuiltinRulesCatalog();
+        const customRules = config.static_analysis?.customRules || [];
+        sendJson(res, 200, {
+          schemaVersion: 'v1',
+          reviewer: config.reviewer || 'hybrid',
+          staticAnalysis: config.static_analysis,
+          builtinCatalog,
+          customRules,
+          starterRules: STARTER_SAMPLE_CUSTOM_RULES_V1,
+          configPath,
+        });
+        return;
+      }
+
+      if (pathname === '/api/rules' && req.method === 'POST') {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const rule = (body && (body.schemaVersion || body.id)) ? body : (body.rule || body);
+        const validation = validateCustomRuleV1(rule);
+        if (!validation.valid) {
+          sendJson(res, 400, {
+            error: 'Custom rule validation failed against Schema v1.',
+            errors: validation.errors,
+          });
+          return;
+        }
+
+        const { config } = loadConfig(workspaceDir);
+        if (!config.static_analysis) {
+          config.static_analysis = {
+            enabled: true,
+            builtinRules: { mode: 'all' },
+            customRules: [],
+          };
+        }
+        if (!config.static_analysis.customRules) {
+          config.static_analysis.customRules = [];
+        }
+
+        const existingIdx = config.static_analysis.customRules.findIndex(
+          (r: any) => r.id === rule.id
+        );
+        if (existingIdx >= 0) {
+          config.static_analysis.customRules[existingIdx] = rule;
+        } else {
+          config.static_analysis.customRules.push(rule);
+        }
+
+        const targetPath = path.join(workspaceDir, '.openrabbit.yaml');
+        fs.writeFileSync(targetPath, serializeConfigToYaml(config), 'utf8');
+
+        sendJson(res, 200, {
+          saved: true,
+          rule,
+          customRules: config.static_analysis.customRules,
+        });
+        return;
+      }
+
+      if (
+        (pathname.startsWith('/api/rules/') &&
+          pathname !== '/api/rules/test' &&
+          pathname !== '/api/rules/config' &&
+          pathname !== '/api/rules/export' &&
+          pathname !== '/api/rules/import' &&
+          req.method === 'DELETE') ||
+        (pathname === '/api/rules' && req.method === 'DELETE')
+      ) {
+        let id = '';
+        if (pathname.startsWith('/api/rules/')) {
+          id = pathname.slice('/api/rules/'.length);
+        } else {
+          id = url.searchParams.get('id') || '';
+          if (!id) {
+            const rawBody = await readBody(req);
+            id = JSON.parse(rawBody || '{}').id || '';
+          }
+        }
+
+        if (!id) {
+          sendJson(res, 400, { error: 'Rule ID is required to delete.' });
+          return;
+        }
+
+        const { config } = loadConfig(workspaceDir);
+        if (config.static_analysis?.customRules) {
+          config.static_analysis.customRules = config.static_analysis.customRules.filter(
+            (r: any) => r.id !== id
+          );
+          const targetPath = path.join(workspaceDir, '.openrabbit.yaml');
+          fs.writeFileSync(targetPath, serializeConfigToYaml(config), 'utf8');
+        }
+
+        sendJson(res, 200, {
+          removed: true,
+          id,
+          customRules: config.static_analysis?.customRules || [],
+        });
+        return;
+      }
+
+      if (pathname === '/api/rules/config' && req.method === 'PUT') {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const { config } = loadConfig(workspaceDir);
+
+        if (body.reviewer) {
+          config.reviewer = body.reviewer;
+        }
+        if (body.staticAnalysis) {
+          config.static_analysis = {
+            ...(config.static_analysis || {
+              enabled: true,
+              builtinRules: { mode: 'all' },
+              customRules: [],
+            }),
+            ...body.staticAnalysis,
+          };
+        }
+
+        const targetPath = path.join(workspaceDir, '.openrabbit.yaml');
+        fs.writeFileSync(targetPath, serializeConfigToYaml(config), 'utf8');
+
+        sendJson(res, 200, {
+          saved: true,
+          reviewer: config.reviewer,
+          staticAnalysis: config.static_analysis,
+        });
+        return;
+      }
+
+      if (pathname === '/api/rules/test' && req.method === 'POST') {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const rule = body.rule;
+        const code = String(body.code || body.snippet || '');
+        const filePath = String(body.filePath || 'sample.ts');
+
+        try {
+          const testResult = testCustomRule(rule, code, filePath);
+          sendJson(res, 200, testResult);
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
+        return;
+      }
+
+      if (pathname === '/api/rules/export' && req.method === 'GET') {
+        const { config } = loadConfig(workspaceDir);
+        const customRules = config.static_analysis?.customRules || [];
+        sendJson(res, 200, {
+          schemaVersion: 'v1',
+          name: 'OpenRabbit Custom Rules Export',
+          description: 'Exported custom static analysis rules (Schema v1)',
+          rules: customRules,
+        });
+        return;
+      }
+
+      if (pathname === '/api/rules/import' && req.method === 'POST') {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const importedRules: any[] = Array.isArray(body.rules)
+          ? body.rules
+          : Array.isArray(body)
+          ? body
+          : [];
+
+        if (importedRules.length === 0) {
+          sendJson(res, 400, {
+            error: "No rules provided. Expected an array of rules under 'rules' or root.",
+          });
+          return;
+        }
+
+        const validated: any[] = [];
+        const invalid: any[] = [];
+        for (const item of importedRules) {
+          const val = validateCustomRuleV1(item);
+          if (val.valid) {
+            validated.push(item);
+          } else {
+            invalid.push({ id: item.id || 'unknown', errors: val.errors });
+          }
+        }
+
+        if (validated.length === 0) {
+          sendJson(res, 400, {
+            error: 'None of the provided rules passed Schema v1 validation.',
+            details: invalid,
+          });
+          return;
+        }
+
+        const { config } = loadConfig(workspaceDir);
+        if (!config.static_analysis) {
+          config.static_analysis = {
+            enabled: true,
+            builtinRules: { mode: 'all' },
+            customRules: [],
+          };
+        }
+        if (!config.static_analysis.customRules) {
+          config.static_analysis.customRules = [];
+        }
+
+        // Merge imported rules
+        const map = new Map<string, any>();
+        for (const r of config.static_analysis.customRules) {
+          map.set(r.id, r);
+        }
+        for (const r of validated) {
+          map.set(r.id, r);
+        }
+        config.static_analysis.customRules = Array.from(map.values());
+
+        const targetPath = path.join(workspaceDir, '.openrabbit.yaml');
+        fs.writeFileSync(targetPath, serializeConfigToYaml(config), 'utf8');
+
+        sendJson(res, 200, {
+          importedCount: validated.length,
+          invalidCount: invalid.length,
+          invalidDetails: invalid,
+          customRules: config.static_analysis.customRules,
         });
         return;
       }
@@ -446,6 +715,17 @@ export async function createOpenRabbitServer(options: {
         if (body.profile) effectiveConfig.profile = body.profile;
         if (body.provider) effectiveConfig.llm.provider = body.provider;
         if (body.model) effectiveConfig.llm.model = body.model;
+        if (body.reviewer) effectiveConfig.reviewer = body.reviewer;
+        if (body.staticAnalysis) {
+          effectiveConfig = mergeConfig(effectiveConfig, {
+            static_analysis: body.staticAnalysis,
+          });
+        }
+        if (Array.isArray(body.customRules)) {
+          effectiveConfig = mergeConfig(effectiveConfig, {
+            custom_rules: body.customRules,
+          });
+        }
 
         const prTitle = body.commitSha
           ? `Commit Review: ${localInfo.description} (${repo?.name || localInfo.repoName})`

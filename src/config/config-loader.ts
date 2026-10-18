@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import { discoverWorkspaceCustomRules } from '../core/custom-rules/rule-file-loader.js';
+import { validateCustomRuleV1 } from '../core/custom-rules/custom-rule-schema.js';
 import type { OpenRabbitConfig, PathInstruction } from '../types/index.js';
 
 export const DEFAULT_OPENRABBIT_CONFIG: OpenRabbitConfig = {
@@ -9,6 +11,17 @@ export const DEFAULT_OPENRABBIT_CONFIG: OpenRabbitConfig = {
   tone_instructions:
     'Be constructive, concise, and high-signal. Prioritize real bugs, security vulnerabilities, race conditions, and performance bottlenecks over stylistic nitpicks.',
   early_access: true,
+  reviewer: 'hybrid',
+  static_analysis: {
+    enabled: true,
+    builtinRules: {
+      mode: 'all',
+      enabledRuleIds: [],
+      disabledRuleIds: [],
+    },
+    customRules: [],
+    customRulesFiles: ['.openrabbit-rules.json', '.openrabbit-rules.yaml'],
+  },
   reviews: {
     high_level_summary: true,
     poem: true,
@@ -83,24 +96,50 @@ export function loadConfig(workspaceDir: string = process.cwd()): {
   config: OpenRabbitConfig;
   configPath: string | null;
 } {
+  let loadedConfig = structuredClone(DEFAULT_OPENRABBIT_CONFIG);
+  let resolvedPath: string | null = null;
+
   for (const filename of CONFIG_FILENAMES) {
     const candidate = path.join(workspaceDir, filename);
     if (fs.existsSync(candidate)) {
       try {
         const raw = fs.readFileSync(candidate, 'utf8');
         const parsed = YAML.parse(raw) || {};
-        return {
-          config: mergeConfig(DEFAULT_OPENRABBIT_CONFIG, parsed),
-          configPath: candidate,
-        };
+        loadedConfig = mergeConfig(DEFAULT_OPENRABBIT_CONFIG, parsed);
+        resolvedPath = candidate;
+        break;
       } catch (err) {
         console.warn(`Warning: Failed to parse ${candidate}, using defaults.`, err);
       }
     }
   }
+
+  // Also auto-discover any workspace custom rules (.openrabbit-rules.json, etc.)
+  try {
+    const discovered = discoverWorkspaceCustomRules(workspaceDir);
+    if (discovered.rules.length > 0) {
+      if (!loadedConfig.static_analysis) {
+        loadedConfig.static_analysis = structuredClone(
+          DEFAULT_OPENRABBIT_CONFIG.static_analysis!
+        );
+      }
+      const existingIds = new Set(
+        (loadedConfig.static_analysis.customRules || []).map((r: any) => r.id)
+      );
+      for (const rule of discovered.rules) {
+        if (!existingIds.has(rule.id)) {
+          loadedConfig.static_analysis.customRules!.push(rule);
+          existingIds.add(rule.id);
+        }
+      }
+    }
+  } catch {
+    // Ignore discovery errors in edge cases
+  }
+
   return {
-    config: structuredClone(DEFAULT_OPENRABBIT_CONFIG),
-    configPath: null,
+    config: loadedConfig,
+    configPath: resolvedPath,
   };
 }
 
@@ -176,6 +215,74 @@ export function mergeConfig(
     if (typeof override.chat.auto_reply === 'boolean') {
       merged.chat.auto_reply = override.chat.auto_reply;
     }
+  }
+
+  if (
+    override.reviewer === 'hybrid' ||
+    override.reviewer === 'custom' ||
+    override.reviewer === 'static-only' ||
+    override.reviewer === 'llm-only'
+  ) {
+    merged.reviewer = override.reviewer;
+  }
+
+  if (override.static_analysis && typeof override.static_analysis === 'object') {
+    if (!merged.static_analysis) {
+      merged.static_analysis = structuredClone(
+        DEFAULT_OPENRABBIT_CONFIG.static_analysis!
+      );
+    }
+    const sa = override.static_analysis;
+    if (typeof sa.enabled === 'boolean') {
+      merged.static_analysis.enabled = sa.enabled;
+    }
+
+    if (sa.builtinRules && typeof sa.builtinRules === 'object') {
+      if (['all', 'subset', 'none'].includes(sa.builtinRules.mode)) {
+        merged.static_analysis.builtinRules.mode = sa.builtinRules.mode;
+      }
+      if (Array.isArray(sa.builtinRules.enabledRuleIds)) {
+        merged.static_analysis.builtinRules.enabledRuleIds =
+          sa.builtinRules.enabledRuleIds;
+      }
+      if (Array.isArray(sa.builtinRules.disabledRuleIds)) {
+        merged.static_analysis.builtinRules.disabledRuleIds =
+          sa.builtinRules.disabledRuleIds;
+      }
+      if (sa.builtinRules.minSeverity) {
+        merged.static_analysis.builtinRules.minSeverity =
+          sa.builtinRules.minSeverity;
+      }
+      if (Array.isArray(sa.builtinRules.categories)) {
+        merged.static_analysis.builtinRules.categories =
+          sa.builtinRules.categories;
+      }
+    }
+
+    if (Array.isArray(sa.customRules)) {
+      merged.static_analysis.customRules = sa.customRules.filter(
+        (r: any) => validateCustomRuleV1(r).valid
+      );
+    }
+    if (Array.isArray(sa.customRulesFiles)) {
+      merged.static_analysis.customRulesFiles = sa.customRulesFiles;
+    }
+  }
+
+  if (Array.isArray(override.custom_rules) || Array.isArray(override.customRules)) {
+    const list = Array.isArray(override.custom_rules)
+      ? override.custom_rules
+      : override.customRules;
+    if (!merged.static_analysis) {
+      merged.static_analysis = structuredClone(
+        DEFAULT_OPENRABBIT_CONFIG.static_analysis!
+      );
+    }
+    const validated = list.filter((r: any) => validateCustomRuleV1(r).valid);
+    merged.static_analysis.customRules = [
+      ...(merged.static_analysis.customRules || []),
+      ...validated,
+    ];
   }
 
   if (override.llm && typeof override.llm === 'object') {

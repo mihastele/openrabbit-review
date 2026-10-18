@@ -8,6 +8,14 @@ export type LLMProviderType =
 
 export type ReviewProfile = 'chill' | 'assertive' | 'security-focused';
 
+export type ReviewerExecutionMode =
+  | 'hybrid'
+  | 'custom'
+  | 'static-only'
+  | 'llm-only';
+
+export type BuiltinRulesMode = 'all' | 'subset' | 'none';
+
 export type ReviewSeverity =
   | 'critical'
   | 'warning'
@@ -35,6 +43,19 @@ export interface OpenRabbitConfig {
   profile: ReviewProfile;
   tone_instructions: string;
   early_access?: boolean;
+  reviewer?: ReviewerExecutionMode;
+  static_analysis?: {
+    enabled: boolean;
+    builtinRules: {
+      mode: BuiltinRulesMode;
+      enabledRuleIds?: string[];
+      disabledRuleIds?: string[];
+      minSeverity?: ReviewSeverity;
+      categories?: ReviewCategory[];
+    };
+    customRules?: any[];
+    customRulesFiles?: string[];
+  };
   reviews: {
     high_level_summary: boolean;
     poem: boolean;
@@ -219,4 +240,6 @@ export interface LocalCommitInfo {
   additions?: number;
   deletions?: number;
 }
+
+export * from '../core/custom-rules/custom-rule-schema.js';
 

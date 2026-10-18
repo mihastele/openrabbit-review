@@ -33,6 +33,7 @@ export interface RunReviewOptions {
   commitSha?: string;
   source?: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'playground';
   config?: OpenRabbitConfig;
+  reviewer?: 'hybrid' | 'custom' | 'static-only' | 'llm-only';
 }
 
 export async function runPullRequestReview(
@@ -40,6 +41,10 @@ export async function runPullRequestReview(
 ): Promise<ReviewResult> {
   const startTime = Date.now();
   const config = options.config || DEFAULT_OPENRABBIT_CONFIG;
+  if (options.reviewer) {
+    config.reviewer = options.reviewer;
+  }
+  const reviewerMode = config.reviewer || 'hybrid';
   const prTitle = options.prTitle || 'Pull Request Changes';
   const repository = options.repository || 'local/repository';
   const source = options.source || 'cli';
@@ -56,18 +61,37 @@ export async function runPullRequestReview(
     config.llm.model
   );
 
-  // Always run deterministic heuristic rules first for high-precision security & async bug detection
-  let findings: InlineFinding[] = runHeuristicInlineReview(filteredFiles, config);
+  const shouldRunStatic =
+    reviewerMode !== 'llm-only' &&
+    (config.static_analysis ? config.static_analysis.enabled !== false : true);
+
+  // Run deterministic static rules (built-in subset + Schema v1 custom rules)
+  let findings: InlineFinding[] = shouldRunStatic
+    ? runHeuristicInlineReview(filteredFiles, config)
+    : [];
+
   let walkthrough: PRWalkthrough = buildHeuristicWalkthrough(
     prTitle,
     filteredFiles,
     findings,
     config
   );
-  let providerUsed: string = activeProviderInfo.provider;
-  let modelUsed: string = activeProviderInfo.model;
 
-  if (activeProviderInfo.provider !== 'heuristic' && filteredFiles.length > 0) {
+  let providerUsed: string =
+    reviewerMode === 'custom'
+      ? 'custom-static'
+      : activeProviderInfo.provider;
+  let modelUsed: string =
+    reviewerMode === 'custom'
+      ? 'openrabbit-rules-v1'
+      : activeProviderInfo.model;
+
+  const shouldRunLLM =
+    reviewerMode !== 'static-only' &&
+    activeProviderInfo.provider !== 'heuristic' &&
+    filteredFiles.length > 0;
+
+  if (shouldRunLLM) {
     try {
       const llmOutput = await runLLMTwoStageReview(
         prTitle,
@@ -98,15 +122,23 @@ export async function runPullRequestReview(
           ? llmOutput.walkthrough.poem || walkthrough.poem
           : '',
       };
-      providerUsed = llmOutput.provider;
-      modelUsed = llmOutput.model;
+      if (reviewerMode === 'custom') {
+        providerUsed = `custom (${llmOutput.provider} + static)`;
+        modelUsed = `${llmOutput.model} + schema-v1`;
+      } else {
+        providerUsed = llmOutput.provider;
+        modelUsed = llmOutput.model;
+      }
     } catch (err) {
       console.warn(
         `[OpenRabbit] External LLM provider (${activeProviderInfo.provider}) unavailable, falling back to built-in AST/Heuristic engine:`,
         (err as Error).message
       );
-      providerUsed = 'heuristic';
-      modelUsed = 'openrabbit-ast-v1 (fallback)';
+      providerUsed = reviewerMode === 'custom' ? 'custom-static' : 'heuristic';
+      modelUsed =
+        reviewerMode === 'custom'
+          ? 'openrabbit-rules-v1'
+          : 'openrabbit-ast-v1 (fallback)';
     }
   }
 

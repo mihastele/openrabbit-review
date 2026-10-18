@@ -6,6 +6,10 @@
   let repositories = [];
   let selectedRepository = null;
   let selectedRepoCommits = [];
+  let customRules = [];
+  let builtinRules = [];
+  let currentRulesConfig = null;
+  let editingRuleId = null;
 
   if (typeof mermaid !== 'undefined') {
     mermaid.initialize({
@@ -47,6 +51,8 @@
         loadHistoryAndAnalytics();
       } else if (target === 'repos') {
         loadRepositories();
+      } else if (target === 'rules') {
+        loadRulesStudio();
       }
     });
   });
@@ -68,6 +74,9 @@
       // Populate Rules & Providers tab
       renderProvidersStatus(statusRes.providers || []);
       populateConfigForm(statusRes.config, statusRes.yamlConfig);
+
+      // Load Custom Rules Studio
+      await loadRulesStudio();
 
       // Populate Sample Templates
       templates = tplRes.templates || [];
@@ -147,6 +156,8 @@
       const repository = document.getElementById('inputRepoName').value;
       const profile = document.getElementById('selectProfile').value;
       const provider = document.getElementById('selectProvider').value;
+      const reviewer =
+        document.getElementById('selectReviewerMode')?.value || 'hybrid';
 
       const res = await fetch('/api/review', {
         method: 'POST',
@@ -157,6 +168,7 @@
           repository,
           profile,
           provider,
+          reviewer,
           source: 'playground',
         }),
       });
@@ -706,6 +718,640 @@
     toast.classList.remove('hidden');
     toast.textContent = `✔ Saved configuration to ${data.configPath}`;
     setTimeout(() => toast.classList.add('hidden'), 3500);
+  });
+
+  // =========================================================================
+  // Custom Rules & Reviewer Studio (Schema v1)
+  // =========================================================================
+
+  async function loadRulesStudio() {
+    try {
+      const res = await fetch('/api/rules');
+      const data = await res.json();
+      customRules = data.customRules || [];
+      builtinRules = data.builtinCatalog || [];
+      currentRulesConfig = data.staticAnalysis || {};
+
+      // Badges
+      const customBadge = document.getElementById('customRulesCountBadge');
+      if (customBadge) customBadge.textContent = String(customRules.length);
+      const builtinBadge = document.getElementById('builtinRulesCountBadge');
+      if (builtinBadge) builtinBadge.textContent = String(builtinRules.length);
+
+      // Reviewer and Static Analysis Mode selects
+      const revModeSelect = document.getElementById('rulesCfgReviewerMode');
+      if (revModeSelect && data.reviewer) {
+        revModeSelect.value = data.reviewer;
+      }
+      const studioRevSelect = document.getElementById('selectReviewerMode');
+      if (studioRevSelect && data.reviewer) {
+        studioRevSelect.value = data.reviewer;
+      }
+
+      const builtinModeSelect = document.getElementById('rulesCfgBuiltinMode');
+      if (builtinModeSelect && currentRulesConfig.builtinRules?.mode) {
+        builtinModeSelect.value = currentRulesConfig.builtinRules.mode;
+      }
+
+      const minSevSelect = document.getElementById('rulesCfgMinSeverity');
+      if (minSevSelect && currentRulesConfig.builtinRules?.minSeverity) {
+        minSevSelect.value = currentRulesConfig.builtinRules.minSeverity;
+      }
+
+      renderCustomRulesTable();
+      renderBuiltinRulesCatalog();
+      populateTestRuleDropdown();
+    } catch (err) {
+      console.error('Failed to load rules studio:', err);
+    }
+  }
+
+  function renderCustomRulesTable() {
+    const tbody = document.getElementById('customRulesTableBody');
+    const summary = document.getElementById('customRulesSummaryText');
+    if (!tbody) return;
+
+    if (summary) {
+      summary.textContent = `${customRules.length} rule${customRules.length === 1 ? '' : 's'} loaded (Schema: v1)`;
+    }
+
+    if (customRules.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="7" class="empty-state">
+            No custom rules defined yet.<br/>
+            <span style="font-size: 12px; color: var(--text-muted);">
+              Define your own static rules above, click <strong>✨ Load Starter Rules</strong>, or import a Schema v1 JSON file.
+            </span>
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    tbody.innerHTML = '';
+    customRules.forEach((rule) => {
+      const tr = document.createElement('tr');
+      const isEnabled = rule.enabled !== false;
+      const languages = (rule.languages || []).join(', ') || '*';
+
+      tr.innerHTML = `
+        <td>
+          <label class="rule-toggle-switch" title="Toggle rule active state">
+            <input type="checkbox" class="rule-enabled-toggle" ${isEnabled ? 'checked' : ''} />
+            <span class="toggle-slider"></span>
+          </label>
+        </td>
+        <td>
+          <span class="rule-id-code">${escapeHtml(rule.id)}</span>
+          <div style="font-weight: 500; margin-top: 4px; color: var(--text-primary);">${escapeHtml(rule.title)}</div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(rule.description.slice(0, 90))}...</div>
+        </td>
+        <td>
+          <span class="sev-badge ${rule.severity}">${rule.severity.toUpperCase()}</span>
+        </td>
+        <td>
+          <span class="mono-tag">${escapeHtml(rule.category)}</span>
+        </td>
+        <td>
+          <span class="rule-lang-badge">${escapeHtml(languages)}</span>
+        </td>
+        <td>
+          <code class="rule-pattern-code" title="${escapeHtml(rule.rule?.pattern || '')}">${escapeHtml(rule.rule?.pattern || '')}</code>
+        </td>
+        <td>
+          <div class="rule-actions-cell">
+            <button class="btn btn-secondary btn-xs btn-edit-rule" title="Edit Rule">✏️ Edit</button>
+            <button class="btn btn-secondary btn-xs btn-test-rule" title="Test in Sandbox">🧪 Test</button>
+            <button class="btn btn-secondary btn-xs btn-delete-rule" title="Delete Rule" style="color: #f87171;">✕</button>
+          </div>
+        </td>
+      `;
+
+      tr.querySelector('.rule-enabled-toggle').addEventListener('change', async (e) => {
+        rule.enabled = e.target.checked;
+        await saveSingleRule(rule);
+      });
+
+      tr.querySelector('.btn-edit-rule').addEventListener('click', () => {
+        openRuleModal(rule);
+      });
+
+      tr.querySelector('.btn-test-rule').addEventListener('click', () => {
+        switchToRulesSubtab('tester');
+        document.getElementById('selectTestRule').value = rule.id;
+        if (!document.getElementById('textareaTestSnippet').value.trim()) {
+          document.getElementById('textareaTestSnippet').value = rule.rule.pattern.includes('console')
+            ? 'console.log("Debug value:", token);'
+            : rule.rule.pattern.includes('http:')
+            ? 'const apiEndpoint = "http://api.internal-service.com/v1/auth";'
+            : 'const data = eval(userInput);';
+        }
+      });
+
+      tr.querySelector('.btn-delete-rule').addEventListener('click', async () => {
+        if (confirm(`Are you sure you want to delete custom rule "${rule.id}"?`)) {
+          await deleteCustomRule(rule.id);
+        }
+      });
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderBuiltinRulesCatalog() {
+    const tbody = document.getElementById('builtinRulesTableBody');
+    if (!tbody) return;
+
+    const query = (document.getElementById('inputSearchBuiltinRules')?.value || '').toLowerCase().trim();
+    const catFilter = document.getElementById('filterBuiltinCategory')?.value || '';
+    const sevFilter = document.getElementById('filterBuiltinSeverity')?.value || '';
+
+    const enabledSet = new Set(currentRulesConfig.builtinRules?.enabledRuleIds || []);
+    const disabledSet = new Set(currentRulesConfig.builtinRules?.disabledRuleIds || []);
+    const mode = currentRulesConfig.builtinRules?.mode || 'all';
+
+    const filtered = builtinRules.filter((b) => {
+      if (query && !b.id.toLowerCase().includes(query) && !b.title.toLowerCase().includes(query) && !b.description.toLowerCase().includes(query)) {
+        return false;
+      }
+      if (catFilter && b.category !== catFilter) return false;
+      if (sevFilter && b.severity !== sevFilter) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No matching built-in rules found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    filtered.forEach((b) => {
+      const tr = document.createElement('tr');
+      const isChecked = mode === 'subset' ? enabledSet.has(b.id) : !disabledSet.has(b.id);
+
+      tr.innerHTML = `
+        <td style="text-align: center;">
+          <input type="checkbox" class="builtin-rule-checkbox" data-rule-id="${escapeHtml(b.id)}" ${isChecked ? 'checked' : ''} />
+        </td>
+        <td>
+          <span class="rule-id-code">${escapeHtml(b.id)}</span>
+        </td>
+        <td>
+          <div style="font-weight: 500; color: var(--text-primary);">${escapeHtml(b.title)}</div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(b.description)}</div>
+        </td>
+        <td>
+          <span class="sev-badge ${b.severity}">${b.severity.toUpperCase()}</span>
+        </td>
+        <td>
+          <span class="mono-tag">${escapeHtml(b.category)}</span>
+        </td>
+        <td>
+          <span class="rule-lang-badge">${escapeHtml(b.languages.join(', '))}</span>
+        </td>
+      `;
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  function populateTestRuleDropdown() {
+    const select = document.getElementById('selectTestRule');
+    if (!select) return;
+
+    select.innerHTML = '';
+    if (customRules.length > 0) {
+      const optGroupCustom = document.createElement('optgroup');
+      optGroupCustom.label = 'Custom Rules (Schema v1)';
+      customRules.forEach((r) => {
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = `${r.id} — ${r.title}`;
+        optGroupCustom.appendChild(opt);
+      });
+      select.appendChild(optGroupCustom);
+    }
+
+    if (builtinRules.length > 0) {
+      const optGroupBuiltin = document.createElement('optgroup');
+      optGroupBuiltin.label = 'Built-in Rules';
+      builtinRules.forEach((b) => {
+        const opt = document.createElement('option');
+        opt.value = b.id;
+        opt.textContent = `${b.id} — ${b.title}`;
+        optGroupBuiltin.appendChild(opt);
+      });
+      select.appendChild(optGroupBuiltin);
+    }
+  }
+
+  function openRuleModal(rule = null) {
+    editingRuleId = rule ? rule.id : null;
+    const modal = document.getElementById('modalCustomRule');
+    const titleEl = document.getElementById('ruleModalTitle');
+    const errEl = document.getElementById('ruleModalError');
+    if (errEl) errEl.classList.add('hidden');
+
+    if (titleEl) {
+      titleEl.textContent = rule ? `✏️ Edit Custom Rule: ${rule.id}` : '➕ Define Custom Static Analysis Rule';
+    }
+
+    document.getElementById('ruleInputId').value = rule ? rule.id : '';
+    document.getElementById('ruleInputId').disabled = Boolean(rule);
+    document.getElementById('ruleInputTitle').value = rule ? rule.title : '';
+    document.getElementById('ruleInputSeverity').value = rule ? rule.severity : 'warning';
+    document.getElementById('ruleInputCategory').value = rule ? rule.category : 'bug';
+    document.getElementById('ruleInputLanguages').value = rule ? (rule.languages || []).join(', ') : 'typescript, javascript';
+    document.getElementById('ruleInputPathFilter').value = rule?.rule?.pathFilter || '';
+    document.getElementById('ruleInputPattern').value = rule?.rule?.pattern || '';
+    document.getElementById('ruleInputNotPattern').value = rule?.rule?.notPattern || '';
+    document.getElementById('ruleInputDescription').value = rule ? rule.description : '';
+    document.getElementById('ruleInputSuggestion').value = rule?.rule?.suggestionTemplate || '';
+    document.getElementById('ruleInputEnabled').checked = rule ? rule.enabled !== false : true;
+
+    modal.classList.remove('hidden');
+  }
+
+  function closeRuleModal() {
+    const modal = document.getElementById('modalCustomRule');
+    if (modal) modal.classList.add('hidden');
+    editingRuleId = null;
+  }
+
+  async function saveSingleRule(rule) {
+    try {
+      const res = await fetch('/api/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rule),
+      });
+      const data = await res.json();
+      if (data.error) {
+        throw new Error(data.error + (data.errors ? ': ' + data.errors.join(', ') : ''));
+      }
+      customRules = data.customRules || customRules;
+      renderCustomRulesTable();
+      populateTestRuleDropdown();
+    } catch (err) {
+      alert('Failed to save rule: ' + err.message);
+    }
+  }
+
+  async function deleteCustomRule(id) {
+    try {
+      const res = await fetch(`/api/rules/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert(data.error);
+        return;
+      }
+      customRules = data.customRules || [];
+      renderCustomRulesTable();
+      populateTestRuleDropdown();
+      const badge = document.getElementById('customRulesCountBadge');
+      if (badge) badge.textContent = String(customRules.length);
+    } catch (err) {
+      alert('Failed to delete rule: ' + err.message);
+    }
+  }
+
+  function switchToRulesSubtab(subtabName) {
+    document.querySelectorAll('.rules-subnav-btn').forEach((b) => {
+      b.classList.toggle('active', b.getAttribute('data-subtab') === subtabName);
+    });
+    document.querySelectorAll('.subtab-panel').forEach((p) => {
+      p.classList.toggle('active', p.id === `subtab-${subtabName}`);
+      p.classList.toggle('hidden', p.id !== `subtab-${subtabName}`);
+    });
+  }
+
+  // Subnav clicks
+  document.querySelectorAll('.rules-subnav-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const subtab = btn.getAttribute('data-subtab');
+      switchToRulesSubtab(subtab);
+    });
+  });
+
+  // Modal handlers
+  document.getElementById('btnOpenNewRuleModal')?.addEventListener('click', () => openRuleModal());
+  document.getElementById('btnCloseRuleModal')?.addEventListener('click', closeRuleModal);
+  document.getElementById('btnCancelRuleModal')?.addEventListener('click', closeRuleModal);
+
+  document.getElementById('formCustomRule')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('ruleModalError');
+    errEl.classList.add('hidden');
+
+    const rawLangs = document.getElementById('ruleInputLanguages').value.split(',').map((s) => s.trim()).filter(Boolean);
+    const ruleObj = {
+      schemaVersion: 'v1',
+      id: document.getElementById('ruleInputId').value.trim(),
+      title: document.getElementById('ruleInputTitle').value.trim(),
+      description: document.getElementById('ruleInputDescription').value.trim(),
+      severity: document.getElementById('ruleInputSeverity').value,
+      category: document.getElementById('ruleInputCategory').value,
+      languages: rawLangs.length > 0 ? rawLangs : ['*'],
+      enabled: document.getElementById('ruleInputEnabled').checked,
+      rule: {
+        type: 'regex',
+        pattern: document.getElementById('ruleInputPattern').value.trim(),
+        flags: 'i',
+        pathFilter: document.getElementById('ruleInputPathFilter').value.trim() || undefined,
+        notPattern: document.getElementById('ruleInputNotPattern').value.trim() || undefined,
+        suggestionTemplate: document.getElementById('ruleInputSuggestion').value.trim() || undefined,
+      },
+    };
+
+    try {
+      const res = await fetch('/api/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ruleObj),
+      });
+      const data = await res.json();
+      if (data.error) {
+        errEl.textContent = `Error: ${data.error} ${data.errors ? '(' + data.errors.join('; ') + ')' : ''}`;
+        errEl.classList.remove('hidden');
+        return;
+      }
+      customRules = data.customRules || [];
+      renderCustomRulesTable();
+      populateTestRuleDropdown();
+      const badge = document.getElementById('customRulesCountBadge');
+      if (badge) badge.textContent = String(customRules.length);
+      closeRuleModal();
+    } catch (err) {
+      errEl.textContent = `Failed to save rule: ${err.message}`;
+      errEl.classList.remove('hidden');
+    }
+  });
+
+  // Save Reviewer Settings
+  document.getElementById('btnSaveReviewerSettings')?.addEventListener('click', async () => {
+    const reviewerMode = document.getElementById('rulesCfgReviewerMode')?.value || 'hybrid';
+    const builtinMode = document.getElementById('rulesCfgBuiltinMode')?.value || 'all';
+    const minSeverity = document.getElementById('rulesCfgMinSeverity')?.value || 'nitpick';
+    const toast = document.getElementById('rulesConfigToast');
+
+    try {
+      const res = await fetch('/api/rules/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reviewer: reviewerMode,
+          staticAnalysis: {
+            enabled: reviewerMode !== 'llm-only',
+            builtinRules: {
+              mode: builtinMode,
+              minSeverity,
+              enabledRuleIds: currentRulesConfig.builtinRules?.enabledRuleIds || [],
+              disabledRuleIds: currentRulesConfig.builtinRules?.disabledRuleIds || [],
+            },
+          },
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert(data.error);
+        return;
+      }
+      toast.className = 'save-toast';
+      toast.textContent = `✔ Successfully saved reviewer mode (${reviewerMode}) and static analysis configuration!`;
+      toast.classList.remove('hidden');
+      setTimeout(() => toast.classList.add('hidden'), 3500);
+
+      // Synchronize PR Studio selector
+      const studioSelect = document.getElementById('selectReviewerMode');
+      if (studioSelect) studioSelect.value = reviewerMode;
+    } catch (err) {
+      alert('Failed to save reviewer config: ' + err.message);
+    }
+  });
+
+  // Link from PR Studio sidebar to Rules Studio
+  document.getElementById('linkConfigureCustomRules')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchToTab('rules');
+  });
+
+  // Load starter rules
+  document.getElementById('btnLoadStarterRules')?.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/rules');
+      const data = await res.json();
+      const starters = data.starterRules || [];
+      if (starters.length === 0) return;
+
+      const importRes = await fetch('/api/rules/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules: starters }),
+      });
+      const importData = await importRes.json();
+      if (importData.error) {
+        alert(importData.error);
+        return;
+      }
+      customRules = importData.customRules || [];
+      renderCustomRulesTable();
+      populateTestRuleDropdown();
+      const badge = document.getElementById('customRulesCountBadge');
+      if (badge) badge.textContent = String(customRules.length);
+      alert(`✔ Successfully loaded ${importData.importedCount} starter Schema v1 rules!`);
+    } catch (err) {
+      alert('Failed to load starter rules: ' + err.message);
+    }
+  });
+
+  // Export JSON
+  document.getElementById('btnExportRules')?.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/rules/export');
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'openrabbit-rules.v1.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Failed to export rules: ' + err.message);
+    }
+  });
+
+  // Import JSON/YAML
+  document.getElementById('btnImportRules')?.addEventListener('click', () => {
+    document.getElementById('fileRulesImport')?.click();
+  });
+
+  document.getElementById('fileRulesImport')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const text = String(reader.result || '');
+        let payload;
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          alert('Import requires valid JSON (Schema v1).');
+          return;
+        }
+        const res = await fetch('/api/rules/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.error) {
+          alert('Import failed: ' + data.error);
+          return;
+        }
+        customRules = data.customRules || [];
+        renderCustomRulesTable();
+        populateTestRuleDropdown();
+        alert(`✔ Successfully imported ${data.importedCount} rules conforming to Schema v1!`);
+      } catch (err) {
+        alert('Failed to parse file: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  });
+
+  // Rule Sandbox Live Tester
+  document.getElementById('btnExecuteRuleTest')?.addEventListener('click', async () => {
+    const ruleId = document.getElementById('selectTestRule')?.value;
+    const code = document.getElementById('textareaTestSnippet')?.value || '';
+    const filePath = document.getElementById('inputTestFilePath')?.value || 'sample.ts';
+    const resultBox = document.getElementById('ruleTestResultBox');
+    const badgeEl = document.getElementById('ruleTestStatusBadge');
+    const detailsEl = document.getElementById('ruleTestMatchDetails');
+
+    if (!code.trim()) {
+      alert('Please enter a code snippet or diff line to test.');
+      return;
+    }
+
+    let targetRule = customRules.find((r) => r.id === ruleId);
+    if (!targetRule) {
+      // Find from built-in
+      const builtin = builtinRules.find((b) => b.id === ruleId);
+      if (builtin) {
+        targetRule = {
+          schemaVersion: 'v1',
+          id: builtin.id,
+          title: builtin.title,
+          description: builtin.description,
+          severity: builtin.severity,
+          category: builtin.category,
+          languages: builtin.languages,
+          rule: {
+            type: 'regex',
+            pattern: builtin.id === 'sec-hardcoded-secret' ? '(?:api[_-]?key|secret|password|token)\\s*[:=]\\s*[\'"][A-Za-z0-9_\\-./+=]{12,}[\'"]' : 'eval\\s*\\(',
+          },
+        };
+      }
+    }
+
+    if (!targetRule && customRules.length > 0) {
+      targetRule = customRules[0];
+    }
+
+    if (!targetRule) {
+      alert('Please select or create a rule to test.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/rules/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rule: targetRule,
+          code,
+          filePath,
+        }),
+      });
+      const data = await res.json();
+      resultBox.classList.remove('hidden');
+
+      if (data.matched) {
+        badgeEl.innerHTML = `<span class="clean-badge" style="background:#22c55e22; color:#4ade80; font-size:13px; font-weight:600;">✔ MATCH DETECTED (${data.matchesCount} match${data.matchesCount === 1 ? '' : 'es'})</span>`;
+        detailsEl.innerHTML = data.matches.map((m) => `
+          <div class="sandbox-match-item">
+            <strong>Line ${m.lineNumber}:</strong> <code>${escapeHtml(m.lineContent)}</code>
+          </div>
+          ${m.suggestionCode ? `
+            <div class="sandbox-match-item suggestion">
+              <strong>✨ Committable Autofix:</strong>
+              <pre style="margin-top:4px;">${escapeHtml(m.suggestionCode)}</pre>
+            </div>
+          ` : ''}
+        `).join('');
+      } else {
+        badgeEl.innerHTML = `<span class="dirty-badge" style="background:#eab30822; color:#facc15; font-size:13px; font-weight:600;">○ NO MATCH — Rule pattern did not trigger on this snippet</span>`;
+        detailsEl.innerHTML = `<div style="font-size:12px; color:var(--text-dim); margin-top:6px;">Tested against rule <code>${escapeHtml(targetRule.id)}</code> pattern: <code>${escapeHtml(targetRule.rule?.pattern || '')}</code></div>`;
+      }
+    } catch (err) {
+      alert('Test failed: ' + err.message);
+    }
+  });
+
+  document.getElementById('btnTestLoadSampleCode')?.addEventListener('click', () => {
+    const ruleId = document.getElementById('selectTestRule')?.value;
+    const rule = customRules.find((r) => r.id === ruleId);
+    if (rule?.rule?.pattern?.includes('http')) {
+      document.getElementById('textareaTestSnippet').value = 'const clientUrl = "http://internal-billing.acme.com/v1/charge";';
+    } else if (rule?.rule?.pattern?.includes('fs')) {
+      document.getElementById('textareaTestSnippet').value = 'const fileData = fs.readFileSync("/etc/passwd", "utf8");';
+    } else {
+      document.getElementById('textareaTestSnippet').value = '+ console.log("User JWT payload:", authToken);';
+    }
+  });
+
+  // Builtin rules search & filters
+  document.getElementById('inputSearchBuiltinRules')?.addEventListener('input', renderBuiltinRulesCatalog);
+  document.getElementById('filterBuiltinCategory')?.addEventListener('change', renderBuiltinRulesCatalog);
+  document.getElementById('filterBuiltinSeverity')?.addEventListener('change', renderBuiltinRulesCatalog);
+
+  // Select all / Deselect all / Save subset
+  document.getElementById('btnSelectAllBuiltinRules')?.addEventListener('click', () => {
+    document.querySelectorAll('.builtin-rule-checkbox').forEach((cb) => { cb.checked = true; });
+  });
+
+  document.getElementById('btnDeselectAllBuiltinRules')?.addEventListener('click', () => {
+    document.querySelectorAll('.builtin-rule-checkbox').forEach((cb) => { cb.checked = false; });
+  });
+
+  document.getElementById('btnSaveBuiltinSubset')?.addEventListener('click', async () => {
+    const checkedIds = Array.from(document.querySelectorAll('.builtin-rule-checkbox:checked')).map((cb) => cb.getAttribute('data-rule-id'));
+    try {
+      const res = await fetch('/api/rules/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          staticAnalysis: {
+            builtinRules: {
+              mode: 'subset',
+              enabledRuleIds: checkedIds,
+            },
+          },
+        }),
+      });
+      const data = await res.json();
+      currentRulesConfig.builtinRules = data.staticAnalysis?.builtinRules || currentRulesConfig.builtinRules;
+      document.getElementById('rulesCfgBuiltinMode').value = 'subset';
+      alert(`✔ Saved subset with ${checkedIds.length} active built-in rules!`);
+    } catch (err) {
+      alert('Failed to save subset: ' + err.message);
+    }
   });
 
   // Webhook Simulator
