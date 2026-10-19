@@ -87,6 +87,11 @@ export interface CustomRuleV1 {
    */
   fileExtensions?: string[];
 
+  /**
+   * Optional glob path filter (e.g. '!**\/*.test.*', 'src\/controllers/**').
+   */
+  pathFilter?: string;
+
   /** The rule match criteria, pattern, and suggestion template */
   rule: CustomRuleMatchDefinitionV1;
 

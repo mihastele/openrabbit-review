@@ -10,6 +10,12 @@
   let builtinRules = [];
   let currentRulesConfig = null;
   let editingRuleId = null;
+  let activeRepoViewMode = 'commits';
+  let currentSubrepos = [];
+  let currentFsBrowseData = null;
+  let selectedFsFolder = null;
+  let fsCallback = null;
+
 
   if (typeof mermaid !== 'undefined') {
     mermaid.initialize({
@@ -1503,9 +1509,18 @@
       const isSel = selectedRepository && selectedRepository.id === repo.id;
       const card = document.createElement('div');
       card.className = `repo-card-item ${isSel ? 'active' : ''}`;
+      const subrepoCount = repo.subreposCount || 0;
+      const subrepoBadge =
+        subrepoCount > 0
+          ? `<span class="subrepo-count-pill" title="${subrepoCount} subrepositories detected">🔗 ${subrepoCount} subrepos</span>`
+          : '';
+
       card.innerHTML = `
         <div class="repo-item-top">
-          <div class="repo-item-name">${escapeHtml(repo.name)}</div>
+          <div class="repo-item-name" style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
+            <span>${escapeHtml(repo.name)}</span>
+            ${subrepoBadge}
+          </div>
           <span class="repo-item-branch">${escapeHtml(repo.branch)}</span>
         </div>
         <div class="repo-item-path" title="${escapeHtml(repo.path)}">${escapeHtml(repo.path)}</div>
@@ -1515,6 +1530,7 @@
         </div>
         <div class="repo-item-actions">
           <button class="btn btn-secondary btn-xs btn-view-commits" style="flex: 1;">Commits</button>
+          ${subrepoCount > 0 ? '<button class="btn btn-secondary btn-xs btn-view-subrepos" style="flex: 1;" title="View and manage subrepos">🔗 Subrepos</button>' : ''}
           <button class="btn btn-secondary btn-xs btn-review-worktree" style="flex: 1;">⚡ Review</button>
           <button class="btn btn-secondary btn-xs btn-remove-repo" title="Remove" style="color: #f87171;">✕</button>
         </div>
@@ -1527,6 +1543,12 @@
 
       card.querySelector('.btn-view-commits').addEventListener('click', () => {
         selectRepository(repo);
+        switchRepoViewMode('commits');
+      });
+
+      card.querySelector('.btn-view-subrepos')?.addEventListener('click', () => {
+        selectRepository(repo, false);
+        switchRepoViewMode('subrepos');
       });
 
       card.querySelector('.btn-review-worktree').addEventListener('click', () => {
@@ -1559,9 +1581,176 @@
     if (subEl) subEl.textContent = `${repo.path} · ${repo.isClean ? 'Working tree clean' : 'Uncommitted changes detected'}`;
     if (actionsEl) actionsEl.style.display = 'flex';
 
-    if (fetchCommits) {
+    // Always fetch subrepos metadata for badge and subrepos view
+    loadSubrepos(repo.id);
+
+    if (fetchCommits && activeRepoViewMode === 'commits') {
       await loadRepoCommits(repo.id);
     }
+  }
+
+  function switchRepoViewMode(mode) {
+    activeRepoViewMode = mode;
+    const btnCommits = document.getElementById('btnViewCommitsMode');
+    const btnSubrepos = document.getElementById('btnViewSubreposMode');
+    const commitsWrap = document.getElementById('commitsTableWrap');
+    const subreposWrap = document.getElementById('subreposViewWrap');
+
+    if (mode === 'commits') {
+      btnCommits?.classList.add('active');
+      btnSubrepos?.classList.remove('active');
+      commitsWrap?.classList.remove('hidden');
+      subreposWrap?.classList.add('hidden');
+      if (selectedRepository && selectedRepoCommits.length === 0) {
+        loadRepoCommits(selectedRepository.id);
+      }
+    } else {
+      btnCommits?.classList.remove('active');
+      btnSubrepos?.classList.add('active');
+      commitsWrap?.classList.add('hidden');
+      subreposWrap?.classList.remove('hidden');
+      if (selectedRepository) {
+        loadSubrepos(selectedRepository.id);
+      }
+    }
+  }
+
+  async function loadSubrepos(repoIdOrPath) {
+    try {
+      const res = await fetch(`/api/repos/subrepos?id=${encodeURIComponent(repoIdOrPath)}`);
+      const data = await res.json();
+      currentSubrepos = data.subrepos || [];
+
+      const badge = document.getElementById('subreposCountBadge');
+      if (badge) badge.textContent = currentSubrepos.length;
+
+      if (selectedRepository && (selectedRepository.id === repoIdOrPath || selectedRepository.path === repoIdOrPath)) {
+        selectedRepository.subreposCount = currentSubrepos.length;
+      }
+
+      renderSubreposView(data.rootRepo || selectedRepository, currentSubrepos);
+    } catch (err) {
+      console.error('Failed to load subrepos:', err);
+    }
+  }
+
+  function renderSubreposView(rootRepo, subrepos) {
+    const root = rootRepo || selectedRepository;
+    const list = subrepos || currentSubrepos || [];
+
+    const rootNameEl = document.getElementById('subreposRootName');
+    const rootBranchEl = document.getElementById('subreposRootBranch');
+    const rootPathEl = document.getElementById('subreposRootPath');
+    if (root && rootNameEl) rootNameEl.textContent = root.name;
+    if (root && rootBranchEl) rootBranchEl.textContent = root.branch;
+    if (root && rootPathEl) rootPathEl.textContent = root.path;
+
+    const cleanCount = list.filter((s) => s.isClean).length;
+    const dirtyCount = list.length - cleanCount;
+
+    const totalChip = document.getElementById('chipTotalSubrepos');
+    const cleanChip = document.getElementById('chipCleanSubrepos');
+    const dirtyChip = document.getElementById('chipDirtySubrepos');
+    if (totalChip) totalChip.textContent = `${list.length} Subrepos`;
+    if (cleanChip) cleanChip.textContent = `${cleanCount} Clean`;
+    if (dirtyChip) dirtyChip.textContent = `${dirtyCount} Modified`;
+
+    const grid = document.getElementById('subreposGridContainer');
+    if (!grid) return;
+
+    if (list.length === 0) {
+      grid.innerHTML = `
+        <div class="empty-state" style="grid-column: 1 / -1; padding: 32px 16px;">
+          <div style="font-size: 28px; margin-bottom: 8px;">🔗</div>
+          <strong style="color: var(--text-primary); font-size: 14px;">No submodules or nested repositories found in this root repository.</strong><br/>
+          <span style="color: var(--text-muted); font-size: 12px; margin-top: 4px; display: inline-block;">
+            OpenRabbit automatically scans <code>.gitmodules</code> and nested directories containing <code>.git</code>.
+          </span>
+        </div>
+      `;
+      return;
+    }
+
+    grid.innerHTML = '';
+    list.forEach((sub) => {
+      const card = document.createElement('div');
+      card.className = 'subrepo-card';
+      const statusPill = sub.isClean
+        ? '<span class="clean-badge">✔ Clean</span>'
+        : `<span class="dirty-badge">● ${sub.modifiedFilesCount || 1} modified</span>`;
+
+      card.innerHTML = `
+        <div>
+          <div class="subrepo-top">
+            <div class="subrepo-title">
+              <span>📁</span>
+              <span>${escapeHtml(sub.name)}</span>
+            </div>
+            <span class="subrepo-type-tag">${sub.isSubmodule ? 'Submodule' : 'Nested Repo'}</span>
+          </div>
+          <div class="subrepo-path" title="${escapeHtml(sub.relativePath)}">${escapeHtml(sub.relativePath)}</div>
+          <div class="subrepo-meta">
+            <div class="subrepo-meta-row">
+              <span class="repo-item-branch">${escapeHtml(sub.branch)}</span>
+              <span>${statusPill}</span>
+            </div>
+            ${sub.lastCommitMessage ? `
+              <div style="font-size: 11.5px; color: var(--text-dim); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(sub.lastCommitMessage)}">
+                <strong>Last:</strong> ${escapeHtml(sub.lastCommitMessage)}
+              </div>
+            ` : ''}
+          </div>
+        </div>
+        <div class="subrepo-actions">
+          <button class="btn btn-primary btn-xs btn-review-subrepo" style="flex: 1;" title="Review uncommitted changes in this subrepo">
+            ⚡ Review Diff
+          </button>
+          <button class="btn btn-secondary btn-xs btn-subrepo-commits" style="flex: 1;" title="View commits for this subrepo">
+            📜 Commits
+          </button>
+          <button class="btn btn-secondary btn-xs btn-pin-subrepo" title="Add as standalone repository in left panel">
+            ➕ Add
+          </button>
+        </div>
+      `;
+
+      card.querySelector('.btn-review-subrepo')?.addEventListener('click', () => {
+        reviewRepositoryWorkingTree(sub.path);
+      });
+
+      card.querySelector('.btn-subrepo-commits')?.addEventListener('click', () => {
+        switchRepoViewMode('commits');
+        loadRepoCommits(sub.path);
+        const titleEl = document.getElementById('selectedRepoTitle');
+        const subEl = document.getElementById('selectedRepoSub');
+        if (titleEl) titleEl.textContent = `📜 Commits: ${sub.name} (${sub.branch})`;
+        if (subEl) subEl.textContent = `${sub.path} · Subrepo of ${root?.name || 'root'}`;
+      });
+
+      card.querySelector('.btn-pin-subrepo')?.addEventListener('click', async () => {
+        try {
+          const res = await fetch('/api/repos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              path: sub.path,
+              name: sub.name,
+            }),
+          });
+          const data = await res.json();
+          if (data.error) {
+            alert(data.error);
+            return;
+          }
+          await loadRepositories();
+          alert(`✔ Subrepo "${sub.name}" registered to repositories!`);
+        } catch (err) {
+          alert('Failed to register subrepo: ' + err.message);
+        }
+      });
+
+      grid.appendChild(card);
+    });
   }
 
   async function loadRepoCommits(repoIdOrPath) {
@@ -1733,7 +1922,8 @@
     repositories.forEach((r) => {
       const opt = document.createElement('option');
       opt.value = r.id;
-      opt.textContent = `${r.name} (${r.branch})`;
+      const subInfo = r.subreposCount ? ` [${r.subreposCount} subrepos]` : '';
+      opt.textContent = `${r.name} (${r.branch})${subInfo}`;
       repoSelect.appendChild(opt);
     });
 
@@ -1866,6 +2056,328 @@
   document.getElementById('btnReviewStaged')?.addEventListener('click', () => {
     if (selectedRepository) reviewRepositoryStaged(selectedRepository.id);
   });
+
+  // =========================================================================
+  // Subrepos Monorepo Action Listeners
+  // =========================================================================
+  document.getElementById('btnRefreshSubrepos')?.addEventListener('click', () => {
+    if (selectedRepository) {
+      loadSubrepos(selectedRepository.id);
+    }
+  });
+
+  document.getElementById('btnReviewAllModifiedSubrepos')?.addEventListener('click', () => {
+    if (!currentSubrepos || currentSubrepos.length === 0) {
+      alert('No subrepositories detected in this root repo.');
+      return;
+    }
+    const modified = currentSubrepos.filter((s) => !s.isClean);
+    if (modified.length === 0) {
+      alert('✔ All subrepositories are clean! No uncommitted changes detected.');
+      return;
+    }
+    const first = modified[0];
+    alert(`Found ${modified.length} modified subrepo${modified.length > 1 ? 's' : ''}. Loading review for "${first.name}" (${first.relativePath})...`);
+    reviewRepositoryWorkingTree(first.path);
+  });
+
+  document.getElementById('btnAddAllSubreposToMain')?.addEventListener('click', async () => {
+    if (!selectedRepository) {
+      alert('Please select a root repository first.');
+      return;
+    }
+    if (!currentSubrepos || currentSubrepos.length === 0) {
+      alert('No subrepositories to add.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/repos/subrepos/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rootId: selectedRepository.id }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert('Error adding subrepos: ' + data.error);
+        return;
+      }
+      await loadRepositories();
+      alert(`✔ Successfully added ${data.count || currentSubrepos.length} subrepositories to your Registered Repositories list!`);
+    } catch (err) {
+      alert('Failed to register subrepos: ' + err.message);
+    }
+  });
+
+  // =========================================================================
+  // Visual Folder Selector Modal Implementation
+  // =========================================================================
+  async function openFolderSelector(initialPath, onChoose) {
+    fsCallback = onChoose || null;
+    selectedFsFolder = null;
+    const modal = document.getElementById('modalFolderSelector');
+    if (modal) modal.classList.remove('hidden');
+
+    const btnOnly = document.getElementById('btnSelectFolderOnly');
+    const btnAdd = document.getElementById('btnSelectAndAddRepo');
+    if (btnOnly) btnOnly.disabled = true;
+    if (btnAdd) btnAdd.disabled = true;
+
+    const filterInput = document.getElementById('inputFsFolderFilter');
+    if (filterInput) filterInput.value = '';
+
+    await loadFsDirectory(initialPath || '');
+  }
+
+  function closeFolderSelector() {
+    document.getElementById('modalFolderSelector')?.classList.add('hidden');
+    selectedFsFolder = null;
+    fsCallback = null;
+  }
+
+  async function loadFsDirectory(targetPath) {
+    const listWrap = document.getElementById('fsFolderListWrap');
+    if (listWrap) {
+      listWrap.innerHTML = '<div class="empty-state">Loading directories...</div>';
+    }
+
+    try {
+      const url = targetPath
+        ? `/api/fs/browse?path=${encodeURIComponent(targetPath)}`
+        : '/api/fs/browse';
+      const res = await fetch(url);
+      const data = await res.json();
+      currentFsBrowseData = data;
+      renderFsBrowse(data);
+    } catch (err) {
+      if (listWrap) {
+        listWrap.innerHTML = `<div class="empty-state" style="color:#f87171;">Failed to browse folder: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+  }
+
+  function renderFsBrowse(data) {
+    const rootsContainer = document.getElementById('fsRootsList');
+    if (rootsContainer) {
+      rootsContainer.innerHTML = '';
+      (data.roots || []).forEach((r) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = `fs-root-chip ${data.currentPath.toLowerCase().startsWith(r.toLowerCase()) ? 'active' : ''}`;
+        chip.textContent = r;
+        chip.addEventListener('click', () => loadFsDirectory(r));
+        rootsContainer.appendChild(chip);
+      });
+    }
+
+    const btnUp = document.getElementById('btnFsGoParent');
+    if (btnUp) {
+      btnUp.disabled = !data.parentPath;
+      btnUp.onclick = () => {
+        if (data.parentPath) loadFsDirectory(data.parentPath);
+      };
+    }
+
+    const btnHome = document.getElementById('btnFsGoHome');
+    if (btnHome) {
+      btnHome.onclick = () => loadFsDirectory(data.homeDir);
+    }
+
+    const btnWorkspace = document.getElementById('btnFsGoWorkspace');
+    if (btnWorkspace) {
+      btnWorkspace.onclick = () => loadFsDirectory(data.workspaceDir);
+    }
+
+    const breadcrumbs = document.getElementById('fsBreadcrumbsBar');
+    if (breadcrumbs) {
+      breadcrumbs.innerHTML = '';
+      const norm = data.currentPath.replace(/\\/g, '/');
+      const parts = norm.split('/').filter(Boolean);
+      let cumulative = norm.startsWith('/') ? '/' : '';
+
+      parts.forEach((part, idx) => {
+        if (cumulative.endsWith('/') || cumulative === '') {
+          cumulative += part;
+        } else {
+          cumulative += '/' + part;
+        }
+
+        const pathTarget = cumulative;
+        const partEl = document.createElement('span');
+        partEl.className = 'fs-breadcrumb-part';
+        partEl.textContent = part;
+        partEl.addEventListener('click', () => loadFsDirectory(pathTarget));
+        breadcrumbs.appendChild(partEl);
+
+        if (idx < parts.length - 1) {
+          const sep = document.createElement('span');
+          sep.className = 'fs-breadcrumb-sep';
+          sep.textContent = ' / ';
+          breadcrumbs.appendChild(sep);
+        }
+      });
+    }
+
+    selectFsFolderEntry({
+      name: data.currentPath.split(/[/\\]/).filter(Boolean).pop() || data.currentPath,
+      path: data.currentPath,
+      isGit: data.isGit,
+      branch: data.branch,
+    });
+
+    renderFsFoldersList(data.folders || []);
+  }
+
+  function renderFsFoldersList(folders) {
+    const listWrap = document.getElementById('fsFolderListWrap');
+    const filterVal = (document.getElementById('inputFsFolderFilter')?.value || '').toLowerCase().trim();
+    const countHint = document.getElementById('fsFolderCountHint');
+
+    if (!listWrap) return;
+
+    const filtered = (folders || []).filter((f) => {
+      if (!filterVal) return true;
+      return f.name.toLowerCase().includes(filterVal);
+    });
+
+    if (countHint) {
+      countHint.textContent = `${filtered.length} folder${filtered.length === 1 ? '' : 's'}`;
+    }
+
+    if (filtered.length === 0) {
+      listWrap.innerHTML = '<div class="empty-state">No matching directories found in this folder.</div>';
+      return;
+    }
+
+    listWrap.innerHTML = '';
+    filtered.forEach((f) => {
+      const item = document.createElement('div');
+      item.className = `fs-folder-item ${selectedFsFolder && selectedFsFolder.path === f.path ? 'selected' : ''}`;
+      item.innerHTML = `
+        <div class="fs-folder-main">
+          <span>📁</span>
+          <span class="fs-folder-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+          ${f.isGit ? `<span class="fs-git-tag">🌿 Git (${escapeHtml(f.branch || 'main')})</span>` : ''}
+        </div>
+        <div style="display: flex; gap: 4px; align-items: center;">
+          <button class="btn btn-secondary btn-xs btn-enter-folder" type="button" title="Enter folder">Open →</button>
+        </div>
+      `;
+
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.btn-enter-folder')) return;
+        document.querySelectorAll('.fs-folder-item').forEach((el) => el.classList.remove('selected'));
+        item.classList.add('selected');
+        selectFsFolderEntry(f);
+      });
+
+      item.addEventListener('dblclick', () => {
+        loadFsDirectory(f.path);
+      });
+
+      item.querySelector('.btn-enter-folder')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        loadFsDirectory(f.path);
+      });
+
+      listWrap.appendChild(item);
+    });
+  }
+
+  function selectFsFolderEntry(folder) {
+    selectedFsFolder = folder;
+    const pathText = document.getElementById('fsSelectedPathText');
+    const gitBadge = document.getElementById('fsGitBadge');
+    const btnOnly = document.getElementById('btnSelectFolderOnly');
+    const btnAdd = document.getElementById('btnSelectAndAddRepo');
+
+    if (pathText) pathText.textContent = folder.path;
+    if (gitBadge) {
+      if (folder.isGit) {
+        gitBadge.classList.remove('hidden');
+        gitBadge.textContent = `🌿 Git Repo (${folder.branch || 'main'})`;
+      } else {
+        gitBadge.classList.add('hidden');
+      }
+    }
+
+    if (btnOnly) btnOnly.disabled = false;
+    if (btnAdd) btnAdd.disabled = false;
+  }
+
+  // Connect folder selector modal triggers
+  document.getElementById('btnOpenFolderSelector')?.addEventListener('click', () => {
+    openFolderSelector(document.getElementById('inputRepoPath')?.value);
+  });
+
+  document.getElementById('btnBrowseFolderInline')?.addEventListener('click', () => {
+    openFolderSelector(document.getElementById('inputRepoPath')?.value);
+  });
+
+  document.getElementById('btnStudioBrowseFolder')?.addEventListener('click', () => {
+    openFolderSelector('', async (folderPath) => {
+      reviewRepositoryWorkingTree(folderPath);
+    });
+  });
+
+  document.getElementById('btnCloseFolderSelector')?.addEventListener('click', closeFolderSelector);
+  document.getElementById('btnCancelFolderSelector')?.addEventListener('click', closeFolderSelector);
+
+  document.getElementById('modalFolderSelector')?.addEventListener('click', (e) => {
+    if (e.target.id === 'modalFolderSelector') {
+      closeFolderSelector();
+    }
+  });
+
+  document.getElementById('inputFsFolderFilter')?.addEventListener('input', () => {
+    renderFsFoldersList(currentFsBrowseData?.folders || []);
+  });
+
+  document.getElementById('btnSelectFolderOnly')?.addEventListener('click', () => {
+    if (!selectedFsFolder) return;
+    if (fsCallback) {
+      fsCallback(selectedFsFolder.path, selectedFsFolder.name);
+    } else {
+      const pathInput = document.getElementById('inputRepoPath');
+      const nameInput = document.getElementById('inputCustomRepoName');
+      if (pathInput) pathInput.value = selectedFsFolder.path;
+      if (nameInput && !nameInput.value.trim()) {
+        nameInput.value = selectedFsFolder.name;
+      }
+    }
+    closeFolderSelector();
+  });
+
+  document.getElementById('btnSelectAndAddRepo')?.addEventListener('click', async () => {
+    if (!selectedFsFolder) return;
+    const feedback = document.getElementById('addRepoFeedback');
+    try {
+      const res = await fetch('/api/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: selectedFsFolder.path,
+          name: selectedFsFolder.name,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert('Could not add repository: ' + data.error);
+        return;
+      }
+      closeFolderSelector();
+      if (feedback) {
+        feedback.className = 'save-toast';
+        feedback.textContent = `✔ Added repository: ${data.repository.name} (${data.repository.branch})`;
+        feedback.classList.remove('hidden');
+      }
+      await loadRepositories();
+      selectRepository(data.repository);
+    } catch (err) {
+      alert('Failed to add repository: ' + err.message);
+    }
+  });
+
 
   // On-Demand Integrations Review
   document.getElementById('btnRunIntegrationReview')?.addEventListener('click', async () => {

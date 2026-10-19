@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
+  browseFilesystem,
+  findSubrepos,
   getCommitDiff,
   getCommitRangeDiff,
   getLocalGitDiff,
@@ -269,6 +272,132 @@ describe('Local Repositories & Integrations Suite', () => {
         r.json()
       );
       assert.ok('bitbucketConfigured' in statusRes.webhooks);
+    } finally {
+      await serverInstance.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('browses filesystem directory tree for folder selector with git repo detection', () => {
+    const browse = browseFilesystem(process.cwd());
+    assert.ok(browse.currentPath);
+    assert.equal(browse.isGit, true);
+    assert.ok(browse.folders.length > 0);
+    assert.ok(browse.roots.length > 0);
+    assert.ok(browse.homeDir);
+    assert.ok(browse.workspaceDir);
+
+    // Folders shouldn't contain node_modules
+    assert.equal(browse.folders.some((f) => f.name === 'node_modules'), false);
+
+    // Fallback on invalid path
+    const fallback = browseFilesystem('D:/__non_existent_folder_xyz_1234__');
+    assert.ok(fallback.currentPath);
+    assert.ok(fs.existsSync(fallback.currentPath));
+  });
+
+  it('detects submodules and nested subrepositories in a root repository', async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openrabbit-subrepos-root-'));
+    try {
+      // 1. Initialize root repo
+      execSync('git init -b main', { cwd: tmpRoot, stdio: 'ignore' });
+      execSync('git config user.name "Test Runner"', { cwd: tmpRoot, stdio: 'ignore' });
+      execSync('git config user.email "test@openrabbit.dev"', { cwd: tmpRoot, stdio: 'ignore' });
+      fs.writeFileSync(path.join(tmpRoot, 'README.md'), '# Root Monorepo\n');
+      execSync('git add . && git commit -m "chore: initial commit in root"', { cwd: tmpRoot, stdio: 'ignore' });
+
+      // 2. Create nested subrepo
+      const sub1Dir = path.join(tmpRoot, 'packages', 'auth-service');
+      fs.mkdirSync(sub1Dir, { recursive: true });
+      execSync('git init -b main', { cwd: sub1Dir, stdio: 'ignore' });
+      execSync('git config user.name "Test Runner"', { cwd: sub1Dir, stdio: 'ignore' });
+      execSync('git config user.email "test@openrabbit.dev"', { cwd: sub1Dir, stdio: 'ignore' });
+      fs.writeFileSync(path.join(sub1Dir, 'index.ts'), 'export const auth = true;\n');
+      execSync('git add . && git commit -m "feat(auth): initial service"', { cwd: sub1Dir, stdio: 'ignore' });
+
+      // 3. Create .gitmodules in root pointing to auth-service
+      const gitmodulesContent = `[submodule "auth-service"]\n\tpath = packages/auth-service\n\turl = https://github.com/acme/auth-service.git\n\tbranch = main\n`;
+      fs.writeFileSync(path.join(tmpRoot, '.gitmodules'), gitmodulesContent);
+
+      // 4. Create another nested git repo (e.g. apps/web) without .gitmodules
+      const sub2Dir = path.join(tmpRoot, 'apps', 'web-client');
+      fs.mkdirSync(sub2Dir, { recursive: true });
+      execSync('git init -b main', { cwd: sub2Dir, stdio: 'ignore' });
+      execSync('git config user.name "Test Runner"', { cwd: sub2Dir, stdio: 'ignore' });
+      execSync('git config user.email "test@openrabbit.dev"', { cwd: sub2Dir, stdio: 'ignore' });
+      fs.writeFileSync(path.join(sub2Dir, 'App.tsx'), 'export const App = () => <div>Hello</div>;\n');
+      execSync('git add . && git commit -m "feat(web): web client setup"', { cwd: sub2Dir, stdio: 'ignore' });
+
+      // 5. Detect subrepos
+      const subrepos = findSubrepos(tmpRoot);
+      assert.equal(subrepos.length, 2);
+
+      const authSub = subrepos.find((s) => s.relativePath === 'packages/auth-service');
+      assert.ok(authSub);
+      assert.equal(authSub?.name, 'auth-service');
+      assert.equal(authSub?.isSubmodule, true);
+      assert.equal(authSub?.isClean, true);
+      assert.equal(authSub?.branch, 'main');
+      assert.ok(authSub?.lastCommitMessage?.includes('initial service'));
+
+      const webSub = subrepos.find((s) => s.relativePath === 'apps/web-client');
+      assert.ok(webSub);
+      assert.equal(webSub?.name, 'web-client');
+      assert.equal(webSub?.isClean, true);
+
+      // 6. Test ReviewStore getSubrepos and registerSubrepos
+      const store = new ReviewStore(path.join(tmpRoot, 'data'));
+      const subData = await store.getSubrepos(tmpRoot);
+      assert.equal(subData.subrepos.length, 2);
+      assert.equal(subData.rootRepo.subreposCount, 2);
+
+      const registered = await store.registerSubrepos(tmpRoot);
+      assert.equal(registered.length, 2);
+      const allRepos = await store.listRepositories();
+      assert.ok(allRepos.some((r) => r.name === 'auth-service'));
+      assert.ok(allRepos.some((r) => r.name === 'web-client'));
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('provides REST API endpoints for folder browser and root subrepo management', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openrabbit-api-subrepos-'));
+    const serverInstance = await createOpenRabbitServer({
+      port: 0,
+      workspaceDir: process.cwd(),
+      storageDir: tmpDir,
+    });
+
+    try {
+      const baseUrl = `http://localhost:${serverInstance.port}`;
+
+      // 1. GET /api/fs/browse
+      const browseRes = await fetch(`${baseUrl}/api/fs/browse`).then((r) =>
+        r.json()
+      );
+      assert.ok(browseRes.currentPath);
+      assert.equal(browseRes.isGit, true);
+      assert.ok(Array.isArray(browseRes.folders));
+      assert.ok(Array.isArray(browseRes.roots));
+
+      // 2. GET /api/repos/subrepos
+      const subreposRes = await fetch(
+        `${baseUrl}/api/repos/subrepos?path=${encodeURIComponent(process.cwd())}`
+      ).then((r) => r.json());
+      assert.ok(subreposRes.rootRepo);
+      assert.ok(Array.isArray(subreposRes.subrepos));
+
+      // 3. POST /api/repos/subrepos/register
+      const registerRes = await fetch(`${baseUrl}/api/repos/subrepos/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rootPath: process.cwd(),
+          subrepoPaths: [],
+        }),
+      }).then((r) => r.json());
+      assert.ok(Array.isArray(registerRes.registered));
     } finally {
       await serverInstance.close();
       fs.rmSync(tmpDir, { recursive: true, force: true });

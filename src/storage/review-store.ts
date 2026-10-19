@@ -2,11 +2,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_OPENRABBIT_CONFIG } from '../config/config-loader.js';
 import {
+  findSubrepos,
   getRepoMetadata,
   validateGitRepository,
 } from '../core/git-utils.js';
 import { runPullRequestReview } from '../core/review-engine.js';
-import type { LocalRepoInfo, ReviewResult } from '../types/index.js';
+import type {
+  LocalRepoInfo,
+  LocalSubrepoInfo,
+  ReviewResult,
+} from '../types/index.js';
+
 
 export interface SampleDiffTemplate {
   id: string;
@@ -630,6 +636,57 @@ export class ReviewStore {
     this.persistRepositories();
     return updated;
   }
+
+  public async getSubrepos(
+    rootRepoIdOrPath: string
+  ): Promise<{ rootRepo: LocalRepoInfo; subrepos: LocalSubrepoInfo[] }> {
+    await this.init();
+    let repo = await this.getRepository(rootRepoIdOrPath);
+    const targetDir = repo ? repo.path : path.resolve(rootRepoIdOrPath);
+
+    if (!repo) {
+      repo = getRepoMetadata(targetDir);
+    }
+
+    const subrepos = findSubrepos(targetDir);
+    const annotated = subrepos.map((s) => ({
+      ...s,
+      parentRepoId: repo.id,
+    }));
+
+    return {
+      rootRepo: repo,
+      subrepos: annotated,
+    };
+  }
+
+  public async registerSubrepos(
+    rootRepoIdOrPath: string,
+    subrepoIdsOrPaths?: string[]
+  ): Promise<LocalRepoInfo[]> {
+    const { subrepos } = await this.getSubrepos(rootRepoIdOrPath);
+    const targets =
+      subrepoIdsOrPaths && subrepoIdsOrPaths.length > 0
+        ? subrepos.filter(
+            (s) =>
+              subrepoIdsOrPaths.includes(s.id) ||
+              subrepoIdsOrPaths.includes(s.path) ||
+              subrepoIdsOrPaths.includes(s.relativePath)
+          )
+        : subrepos;
+
+    const registered: LocalRepoInfo[] = [];
+    for (const sub of targets) {
+      try {
+        const added = await this.addRepository(sub.path, sub.name);
+        registered.push(added);
+      } catch {
+        // continue
+      }
+    }
+    return registered;
+  }
+
 
   private persistRepositories(): void {
     try {

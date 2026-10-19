@@ -69,7 +69,10 @@
           <div class="studio-repo-picker-box">
             <div class="picker-header-row">
               <label class="field-label">📁 Pick from Local Repository:</label>
-              <a href="#" class="link-subtle" id="linkGoToReposTab">Manage Repos →</a>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <button class="btn btn-secondary btn-xs" id="btnStudioBrowseFolder" type="button" title="Browse and select any git repository folder">📁 Browse Folder...</button>
+                <a href="#" class="link-subtle" id="linkGoToReposTab">Manage Repos →</a>
+              </div>
             </div>
             <div class="form-row-2">
               <select id="selectStudioRepo" class="input input-sm">
@@ -290,15 +293,25 @@
           <div class="card-header">
             <div>
               <h2>📁 Add Local Repository for Review</h2>
-              <p class="card-subtitle">Connect any git repository on your local filesystem to browse commits, diffs, and launch instant AI reviews.</p>
+              <p class="card-subtitle">Connect any git repository on your local filesystem using the visual folder selector or directory path.</p>
             </div>
-            <button class="btn btn-secondary btn-xs" id="btnUseCurrentDir">📂 Use Current Directory</button>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="btn btn-primary btn-xs" id="btnOpenFolderSelector" type="button" title="Open visual folder selector modal">
+                📁 Browse Folder...
+              </button>
+              <button class="btn btn-secondary btn-xs" id="btnUseCurrentDir">📂 Use Current Directory</button>
+            </div>
           </div>
 
           <div class="form-row-2">
             <div>
               <label class="field-label" for="inputRepoPath">Local Repository Directory Path</label>
-              <input type="text" id="inputRepoPath" class="input" placeholder="e.g. D:/development/my-repo or /home/user/project or ." />
+              <div class="input-with-button-group">
+                <input type="text" id="inputRepoPath" class="input" placeholder="e.g. D:/development/my-repo or click Browse Folder..." />
+                <button class="btn btn-secondary btn-sm" id="btnBrowseFolderInline" type="button" title="Browse folders">
+                  📁 Browse...
+                </button>
+              </div>
             </div>
             <div>
               <label class="field-label" for="inputCustomRepoName">Custom Display Name (Optional)</label>
@@ -314,7 +327,7 @@
           </div>
         </div>
 
-        <!-- Two Column View: Registered Repos List & Selected Repo Commits -->
+        <!-- Two Column View: Registered Repos List & Selected Repo Commits / Subrepos -->
         <div class="repos-grid">
           <!-- Registered Repositories Card -->
           <div class="card">
@@ -330,24 +343,36 @@
             </div>
           </div>
 
-          <!-- Commit History and Review Panel -->
+          <!-- Commit History and Subrepos Monorepo Management Panel -->
           <div class="card commit-viewer-card">
-            <div class="card-header">
+            <div class="card-header" style="flex-wrap: wrap; gap: 12px;">
               <div>
                 <h2 id="selectedRepoTitle">📜 Commit History</h2>
-                <p class="card-subtitle" id="selectedRepoSub">Select a repository on the left to inspect its commits</p>
+                <p class="card-subtitle" id="selectedRepoSub">Select a repository on the left to inspect its commits or subrepos</p>
               </div>
-              <div class="commit-header-actions" id="commitHeaderActions" style="display: none; gap: 8px;">
-                <button class="btn btn-secondary btn-xs" id="btnReviewWorkingTree">
-                  <span>⚡</span> Review Working Tree
-                </button>
-                <button class="btn btn-secondary btn-xs" id="btnReviewStaged">
-                  <span>📦</span> Review Staged
-                </button>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <!-- View Mode Toggle: Commits vs Subrepos -->
+                <div class="repo-view-mode-toggle" id="repoViewModeToggle">
+                  <button class="view-toggle-btn active" id="btnViewCommitsMode" data-view="commits">
+                    📜 Commits
+                  </button>
+                  <button class="view-toggle-btn" id="btnViewSubreposMode" data-view="subrepos">
+                    🔗 Subrepos (<span id="subreposCountBadge">0</span>)
+                  </button>
+                </div>
+                <div class="commit-header-actions" id="commitHeaderActions" style="display: none; gap: 8px;">
+                  <button class="btn btn-secondary btn-xs" id="btnReviewWorkingTree">
+                    <span>⚡</span> Review Working Tree
+                  </button>
+                  <button class="btn btn-secondary btn-xs" id="btnReviewStaged">
+                    <span>📦</span> Review Staged
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div class="table-wrap">
+            <!-- View 1: Commit History Table -->
+            <div class="table-wrap" id="commitsTableWrap">
               <table class="walkthrough-table commits-table">
                 <thead>
                   <tr>
@@ -367,6 +392,43 @@
                   </tr>
                 </tbody>
               </table>
+            </div>
+
+            <!-- View 2: Subrepos and Monorepo Management View -->
+            <div id="subreposViewWrap" class="subrepos-view-wrap hidden">
+              <div class="monorepo-banner" id="monorepoBanner">
+                <div class="monorepo-banner-top">
+                  <div>
+                    <div class="monorepo-title-row">
+                      <span class="monorepo-icon">📦</span>
+                      <span class="monorepo-name" id="subreposRootName">Root Repository</span>
+                      <span class="repo-item-branch" id="subreposRootBranch">main</span>
+                    </div>
+                    <div class="repo-item-path" id="subreposRootPath">/path/to/root</div>
+                  </div>
+                  <div class="monorepo-actions">
+                    <button class="btn btn-secondary btn-xs" id="btnRefreshSubrepos" title="Rescan subrepositories">
+                      🔄 Rescan
+                    </button>
+                    <button class="btn btn-primary btn-xs" id="btnReviewAllModifiedSubrepos" title="Review all modified subrepos">
+                      ⚡ Review Modified
+                    </button>
+                    <button class="btn btn-secondary btn-xs" id="btnAddAllSubreposToMain" title="Register all subrepos to left panel">
+                      ➕ Add All to Repos
+                    </button>
+                  </div>
+                </div>
+                <div class="monorepo-stats-row" id="monorepoStatsRow">
+                  <div class="monorepo-stat-chip" id="chipTotalSubrepos">0 Subrepos</div>
+                  <div class="monorepo-stat-chip clean" id="chipCleanSubrepos">0 Clean</div>
+                  <div class="monorepo-stat-chip dirty" id="chipDirtySubrepos">0 Modified</div>
+                </div>
+              </div>
+
+              <!-- Subrepos Grid Container -->
+              <div class="subrepos-grid" id="subreposGridContainer">
+                <div class="empty-state">No submodules or nested repositories found.</div>
+              </div>
             </div>
           </div>
         </div>
@@ -905,6 +967,72 @@ jobs:
         </div>
       </div>
     </main>
+  </div>
+
+  <!-- ==================================================================== -->
+  <!-- FOLDER SELECTOR MODAL                                                -->
+  <!-- ==================================================================== -->
+  <div id="modalFolderSelector" class="rule-modal-backdrop hidden">
+    <div class="rule-modal folder-selector-modal">
+      <div class="rule-modal-header">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h3>📁 Select Git Repository Folder</h3>
+            <span class="schema-pill">Filesystem Explorer</span>
+          </div>
+          <p class="card-subtitle" style="margin-top: 4px;">
+            Navigate folders and select any Git repository directly without typing or pasting paths.
+          </p>
+        </div>
+        <button class="btn btn-secondary btn-xs" id="btnCloseFolderSelector">✕</button>
+      </div>
+
+      <!-- Quick Jump Shortcuts & Roots Bar -->
+      <div class="fs-quick-bar">
+        <div class="fs-roots-list" id="fsRootsList"></div>
+        <div class="fs-shortcuts-list">
+          <button class="btn btn-secondary btn-xs" id="btnFsGoHome" title="User Home Directory">🏠 Home</button>
+          <button class="btn btn-secondary btn-xs" id="btnFsGoWorkspace" title="OpenRabbit Workspace">💻 Workspace</button>
+          <button class="btn btn-secondary btn-xs" id="btnFsGoParent" title="Parent Directory">⬆️ Up</button>
+        </div>
+      </div>
+
+      <!-- Breadcrumbs Path -->
+      <div class="fs-breadcrumbs-bar" id="fsBreadcrumbsBar">
+        <span class="mono-hint">Loading path...</span>
+      </div>
+
+      <!-- Filter / Search Folders -->
+      <div class="fs-filter-row">
+        <input type="text" id="inputFsFolderFilter" class="input input-sm" placeholder="🔍 Filter folders in current directory..." />
+        <span class="mono-hint" id="fsFolderCountHint">0 folders</span>
+      </div>
+
+      <!-- Folder Entries List -->
+      <div class="fs-folder-list-wrap" id="fsFolderListWrap">
+        <div class="empty-state">Loading directories...</div>
+      </div>
+
+      <!-- Selected Path Preview Banner -->
+      <div class="fs-selection-preview" id="fsSelectionPreview">
+        <div class="fs-preview-top">
+          <span class="field-label">Selected Directory:</span>
+          <span id="fsGitBadge" class="fs-git-status-badge hidden">🌿 Git Repo</span>
+        </div>
+        <div class="fs-selected-path mono-tag" id="fsSelectedPathText">No folder selected</div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="rule-modal-footer">
+        <button class="btn btn-secondary" id="btnCancelFolderSelector">Cancel</button>
+        <button class="btn btn-secondary" id="btnSelectFolderOnly" disabled>
+          ✔ Choose Folder
+        </button>
+        <button class="btn btn-primary" id="btnSelectAndAddRepo" disabled>
+          ➕ Choose &amp; Add Repository
+        </button>
+      </div>
+    </div>
   </div>
 
   <script src="/app.js"></script>

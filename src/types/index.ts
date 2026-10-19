@@ -225,6 +225,41 @@ export interface LocalRepoInfo {
   lastCommitMessage?: string;
   lastCommitDate?: string;
   addedAt: string;
+  subreposCount?: number;
+}
+
+export interface LocalSubrepoInfo {
+  id: string;
+  name: string;
+  relativePath: string;
+  path: string;
+  branch: string;
+  remoteUrl?: string;
+  isClean: boolean;
+  modifiedFilesCount?: number;
+  headSha?: string;
+  lastCommitMessage?: string;
+  lastCommitDate?: string;
+  isSubmodule: boolean;
+  parentRepoId?: string;
+}
+
+export interface FsFolderEntry {
+  name: string;
+  path: string;
+  isGit: boolean;
+  branch?: string;
+}
+
+export interface FsBrowseResult {
+  currentPath: string;
+  parentPath: string | null;
+  isGit: boolean;
+  branch?: string;
+  folders: FsFolderEntry[];
+  roots: string[];
+  homeDir: string;
+  workspaceDir: string;
 }
 
 export interface LocalCommitInfo {
@@ -242,4 +277,5 @@ export interface LocalCommitInfo {
 }
 
 export * from '../core/custom-rules/custom-rule-schema.js';
+
 

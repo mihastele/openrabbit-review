@@ -17,6 +17,8 @@ import {
 import { handlePRChat } from '../core/chat-engine.js';
 import { parseUnifiedDiff } from '../core/diff-parser.js';
 import {
+  browseFilesystem,
+  findSubrepos,
   getCommitDiff,
   getLocalGitDiff,
   getRepoCommits,
@@ -580,11 +582,57 @@ export async function createOpenRabbitServer(options: {
       }
 
       // ======================================================================
+      // Filesystem Directory Browser (Folder Selector)
+      // ======================================================================
+      if (pathname === '/api/fs/browse' && req.method === 'GET') {
+        const targetPath = url.searchParams.get('path') || undefined;
+        try {
+          const browseData = browseFilesystem(targetPath, workspaceDir);
+          sendJson(res, 200, browseData);
+        } catch (err) {
+          sendJson(res, 500, { error: (err as Error).message });
+        }
+        return;
+      }
+
+      // ======================================================================
       // Local Repositories Management & Commit Exploration
       // ======================================================================
       if (pathname === '/api/repos' && req.method === 'GET') {
         const repositories = await store.listRepositories();
         sendJson(res, 200, { repositories });
+        return;
+      }
+
+      if (pathname === '/api/repos/subrepos' && req.method === 'GET') {
+        const targetIdOrPath =
+          url.searchParams.get('id') ||
+          url.searchParams.get('path') ||
+          workspaceDir;
+        try {
+          const subreposData = await store.getSubrepos(targetIdOrPath);
+          sendJson(res, 200, subreposData);
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
+        return;
+      }
+
+      if (pathname === '/api/repos/subrepos/register' && req.method === 'POST') {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const targetIdOrPath = body.rootId || body.rootPath || workspaceDir;
+        const subrepoTargets = body.subrepoIds || body.subrepoPaths;
+
+        try {
+          const registered = await store.registerSubrepos(
+            targetIdOrPath,
+            subrepoTargets
+          );
+          sendJson(res, 200, { registered, count: registered.length });
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
         return;
       }
 

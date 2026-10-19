@@ -1,8 +1,16 @@
 import { execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import type { LocalCommitInfo, LocalRepoInfo } from '../types/index.js';
+import type {
+  FsBrowseResult,
+  FsFolderEntry,
+  LocalCommitInfo,
+  LocalRepoInfo,
+  LocalSubrepoInfo,
+} from '../types/index.js';
+
 
 export interface LocalGitDiffOptions {
   cwd?: string;
@@ -92,6 +100,14 @@ export function getRepoMetadata(
   const lastCommitSubject = safeExec('git log -1 --format=%s', repoDir) || '';
   const lastCommitDate = safeExec('git log -1 --format=%aI', repoDir) || '';
 
+  // Detect subrepos count
+  let subreposCount = 0;
+  try {
+    subreposCount = findSubrepos(repoDir).length;
+  } catch {
+    subreposCount = 0;
+  }
+
   // Deterministic stable ID based on absolute path
   const normalizedPath = repoDir.replace(/\\/g, '/').toLowerCase();
   const id =
@@ -109,6 +125,7 @@ export function getRepoMetadata(
     lastCommitMessage: lastCommitSubject || undefined,
     lastCommitDate: lastCommitDate || undefined,
     addedAt: new Date().toISOString(),
+    subreposCount,
   };
 }
 
@@ -328,3 +345,285 @@ export function getLocalGitDiff(options: LocalGitDiffOptions = {}): {
     commitSha,
   };
 }
+
+/**
+ * Detects all subrepositories (git submodules or nested git repositories)
+ * inside a root repository.
+ */
+export function findSubrepos(rootRepoPath: string): LocalSubrepoInfo[] {
+  const validation = validateGitRepository(rootRepoPath);
+  if (!validation.valid || !validation.topLevel) {
+    return [];
+  }
+
+  const rootDir = validation.topLevel;
+  const subreposMap = new Map<string, LocalSubrepoInfo>();
+
+  // 1. Check .gitmodules if present
+  const gitmodulesPath = path.join(rootDir, '.gitmodules');
+  if (fs.existsSync(gitmodulesPath)) {
+    try {
+      const content = fs.readFileSync(gitmodulesPath, 'utf8');
+      const submoduleBlockRegex = /\[submodule\s+"?([^"\]]+)"?\]([\s\S]*?)(?=(?:\[submodule|$))/g;
+      let blockMatch;
+      while ((blockMatch = submoduleBlockRegex.exec(content)) !== null) {
+        const subName = blockMatch[1].trim();
+        const blockBody = blockMatch[2];
+        const pathMatch = blockBody.match(/path\s*=\s*([^\r\n]+)/);
+        const urlMatch = blockBody.match(/url\s*=\s*([^\r\n]+)/);
+        const branchMatch = blockBody.match(/branch\s*=\s*([^\r\n]+)/);
+
+        if (pathMatch) {
+          const subRelPath = pathMatch[1].trim().replace(/\\/g, '/');
+          const subFullPath = path.resolve(rootDir, subRelPath);
+          if (fs.existsSync(subFullPath)) {
+            const subBranch =
+              safeExec('git rev-parse --abbrev-ref HEAD', subFullPath) ||
+              branchMatch?.[1]?.trim() ||
+              'main';
+            const headSha = safeExec('git rev-parse HEAD', subFullPath) || undefined;
+            const statusOutput = safeExec('git status --porcelain', subFullPath);
+            const dirtyCount = statusOutput
+              ? statusOutput.split('\n').filter((l) => l.trim()).length
+              : 0;
+            const isClean = dirtyCount === 0;
+            const lastCommitMsg =
+              safeExec('git log -1 --format=%s', subFullPath) || undefined;
+            const lastCommitDate =
+              safeExec('git log -1 --format=%aI', subFullPath) || undefined;
+            const subRemoteUrl =
+              urlMatch?.[1]?.trim() ||
+              safeExec('git config --get remote.origin.url', subFullPath) ||
+              undefined;
+            const normalizedPath = subFullPath.replace(/\\/g, '/').toLowerCase();
+            const id =
+              'subrepo_' +
+              crypto.createHash('sha256').update(normalizedPath).digest('hex').slice(0, 12);
+
+            subreposMap.set(normalizedPath, {
+              id,
+              name: subName || path.basename(subRelPath),
+              relativePath: subRelPath,
+              path: subFullPath,
+              branch: subBranch,
+              remoteUrl: subRemoteUrl,
+              isClean,
+              modifiedFilesCount: dirtyCount,
+              headSha,
+              lastCommitMessage: lastCommitMsg,
+              lastCommitDate,
+              isSubmodule: true,
+            });
+          }
+        }
+      }
+    } catch {
+      // Ignore gitmodules parse error
+    }
+  }
+
+  // 2. Scan directories up to depth 3 for nested .git directories or git files
+  const IGNORED_DIRS = new Set([
+    '.git',
+    'node_modules',
+    'dist',
+    'build',
+    'vendor',
+    'target',
+    '.next',
+    '.nuxt',
+    '.turbo',
+    '.cache',
+    'coverage',
+    'tmp',
+    'temp',
+    '.venv',
+    'venv',
+    '__pycache__',
+  ]);
+
+  function scanDir(currentDir: string, currentDepth: number) {
+    if (currentDepth > 3) return;
+
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+
+      const childPath = path.join(currentDir, entry.name);
+      const normalizedChild = childPath.replace(/\\/g, '/').toLowerCase();
+      const dotGit = path.join(childPath, '.git');
+
+      if (fs.existsSync(dotGit)) {
+        // Nested git repository or submodule
+        if (!subreposMap.has(normalizedChild)) {
+          const subRelPath = path.relative(rootDir, childPath).replace(/\\/g, '/');
+          const subBranch =
+            safeExec('git rev-parse --abbrev-ref HEAD', childPath) || 'main';
+          const headSha = safeExec('git rev-parse HEAD', childPath) || undefined;
+          const statusOutput = safeExec('git status --porcelain', childPath);
+          const dirtyCount = statusOutput
+            ? statusOutput.split('\n').filter((l) => l.trim()).length
+            : 0;
+          const isClean = dirtyCount === 0;
+          const lastCommitMsg =
+            safeExec('git log -1 --format=%s', childPath) || undefined;
+          const lastCommitDate =
+            safeExec('git log -1 --format=%aI', childPath) || undefined;
+          const remoteUrl =
+            safeExec('git config --get remote.origin.url', childPath) || undefined;
+          let isSubmodule = false;
+          try {
+            isSubmodule = fs.statSync(dotGit).isFile();
+          } catch {
+            isSubmodule = false;
+          }
+
+          const id =
+            'subrepo_' +
+            crypto.createHash('sha256').update(normalizedChild).digest('hex').slice(0, 12);
+
+          subreposMap.set(normalizedChild, {
+            id,
+            name: entry.name,
+            relativePath: subRelPath,
+            path: childPath,
+            branch: subBranch,
+            remoteUrl,
+            isClean,
+            modifiedFilesCount: dirtyCount,
+            headSha,
+            lastCommitMessage: lastCommitMsg,
+            lastCommitDate,
+            isSubmodule,
+          });
+        }
+        continue;
+      }
+
+      scanDir(childPath, currentDepth + 1);
+    }
+  }
+
+  scanDir(rootDir, 1);
+
+  return Array.from(subreposMap.values()).sort((a, b) =>
+    a.relativePath.localeCompare(b.relativePath)
+  );
+}
+
+/**
+ * Safe filesystem directory browser for the folder selector modal.
+ */
+export function browseFilesystem(
+  targetPath?: string,
+  workspaceDir?: string
+): FsBrowseResult {
+  const defaultDir = workspaceDir || process.cwd();
+  let resolved: string;
+
+  if (targetPath && targetPath.trim()) {
+    resolved = path.resolve(targetPath.trim());
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+      resolved = path.resolve(defaultDir);
+    }
+  } else {
+    resolved = path.resolve(defaultDir);
+  }
+
+  // Detect roots (Drives on Windows, / on Unix)
+  const roots: string[] = [];
+  if (process.platform === 'win32') {
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (let i = 0; i < letters.length; i++) {
+      const drive = `${letters[i]}:\\`;
+      try {
+        if (fs.existsSync(drive)) roots.push(drive);
+      } catch {
+        // ignore
+      }
+    }
+    if (roots.length === 0) roots.push('C:\\');
+  } else {
+    roots.push('/');
+  }
+
+  // Determine parent path
+  const parsed = path.parse(resolved);
+  const parent = path.dirname(resolved);
+  const isAtRoot = resolved.toLowerCase() === parsed.root.toLowerCase();
+  const parentPath = isAtRoot ? null : parent;
+
+  // Check if current path is a git repo
+  const gitValidation = validateGitRepository(resolved);
+  const isGit = gitValidation.valid;
+  let branch: string | undefined = undefined;
+  if (isGit && gitValidation.topLevel) {
+    branch = safeExec('git rev-parse --abbrev-ref HEAD', gitValidation.topLevel) || undefined;
+  }
+
+  // Read subfolders
+  const folders: FsFolderEntry[] = [];
+  try {
+    const entries = fs.readdirSync(resolved, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      // Skip recycle bins and volume information
+      if (
+        entry.name.startsWith('$') ||
+        entry.name === 'System Volume Information' ||
+        entry.name === 'node_modules'
+      ) {
+        continue;
+      }
+
+      const fullChild = path.join(resolved, entry.name);
+      let childIsGit = false;
+      let childBranch: string | undefined = undefined;
+
+      try {
+        const dotGit = path.join(fullChild, '.git');
+        if (fs.existsSync(dotGit)) {
+          childIsGit = true;
+          childBranch = safeExec('git rev-parse --abbrev-ref HEAD', fullChild) || 'main';
+        }
+      } catch {
+        // ignore
+      }
+
+      folders.push({
+        name: entry.name,
+        path: fullChild,
+        isGit: childIsGit,
+        branch: childBranch,
+      });
+    }
+  } catch {
+    // If directory access denied, return empty folders list
+  }
+
+  // Sort folders: git repos first, then alphabetically
+  folders.sort((a, b) => {
+    if (a.isGit && !b.isGit) return -1;
+    if (!a.isGit && b.isGit) return 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+
+  return {
+    currentPath: resolved,
+    parentPath,
+    isGit,
+    branch,
+    folders,
+    roots,
+    homeDir: os.homedir(),
+    workspaceDir: defaultDir,
+  };
+}
+
