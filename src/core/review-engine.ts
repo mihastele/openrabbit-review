@@ -21,6 +21,8 @@ import {
   resolveActiveProvider,
 } from './llm-provider.js';
 import { formatWalkthroughMarkdown } from './markdown-formatter.js';
+import { enrichDiffContext } from './context-enricher.js';
+import { loadRepoMemory, resolveMemoryFilePath } from './repo-memory.js';
 import { runSecurityScanners } from './security-scanners/index.js';
 
 export interface RunReviewOptions {
@@ -28,6 +30,7 @@ export interface RunReviewOptions {
   prTitle?: string;
   repository?: string;
   repoPath?: string;
+  memoryFilePath?: string;
   prNumber?: number;
   author?: string;
   baseBranch?: string;
@@ -108,6 +111,18 @@ export async function runPullRequestReview(
     }
   }
 
+  const repoMemory =
+    options.repoPath || options.memoryFilePath
+      ? loadRepoMemory(resolveMemoryFilePath(options.repoPath, options.memoryFilePath))
+      : { ignoredRules: [], instructions: [], updatedAt: '' };
+  const ignoredRuleSet = new Set(repoMemory.ignoredRules);
+  const filterIgnored = (items: InlineFinding[]) =>
+    ignoredRuleSet.size > 0
+      ? items.filter((f) => !(f.ruleMatched && ignoredRuleSet.has(f.ruleMatched)) && !ignoredRuleSet.has(f.id))
+      : items;
+
+  findings = filterIgnored(findings);
+
   if (config.profile === 'security-focused') {
     findings = findings.filter((finding) => finding.category === 'security');
   }
@@ -135,12 +150,17 @@ export async function runPullRequestReview(
 
   if (shouldRunLLM) {
     try {
+      const crossFileContext = options.repoPath
+        ? enrichDiffContext(options.repoPath, filteredFiles).formattedPromptContext
+        : '';
       const llmOutput = await runLLMTwoStageReview(
         prTitle,
         filteredFiles,
         config,
         activeProviderInfo.provider,
-        activeProviderInfo.model
+        activeProviderInfo.model,
+        crossFileContext,
+        repoMemory.instructions
       );
       const llmFindings = config.profile === 'security-focused'
         ? llmOutput.findings.filter((finding) => finding.category === 'security' && finding.severity !== 'praise')
@@ -189,6 +209,8 @@ export async function runPullRequestReview(
           : 'openrabbit-ast-v1 (fallback)';
     }
   }
+
+  findings = filterIgnored(findings);
 
   if (config.profile === 'security-focused') {
     walkthrough = {
@@ -256,7 +278,9 @@ async function runLLMTwoStageReview(
   files: FileDiff[],
   config: OpenRabbitConfig,
   provider: Exclude<OpenRabbitConfig['llm']['provider'], 'auto'>,
-  model: string
+  model: string,
+  crossFileContext: string = '',
+  rememberedInstructions: string[] = []
 ): Promise<{
   walkthrough: Partial<PRWalkthrough>;
   findings: InlineFinding[];
@@ -280,6 +304,8 @@ async function runLLMTwoStageReview(
 Profile mode: ${config.profile.toUpperCase()}
 Tone instructions: ${config.tone_instructions}
 Human Review Language: ${config.language}
+${rememberedInstructions.length > 0 ? `\nRepository Team Guidelines (Remembered):\n${rememberedInstructions.map((i) => `- ${i}`).join('\n')}` : ''}
+${crossFileContext ? `\n${crossFileContext}` : ''}
 ${config.profile === 'security-focused' ? `Security review: report only security findings. Examine authorization, trust boundaries, injection, secrets, insecure cryptography, and sensitive data exposure. Cite evidence in the diff, explain prerequisites and uncertainty, and give practical remediation. Do not claim exploitability or repository-wide safety without evidence.` : ''}
 
 Apply deep, language-idiomatic standards across all languages present in the diff:

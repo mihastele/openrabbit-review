@@ -7,6 +7,8 @@ export * from './core/markdown-formatter.js';
 export * from './core/sarif-formatter.js';
 export * from './core/security-scanners/index.js';
 export * from './core/job-queue.js';
+export * from './core/context-enricher.js';
+export * from './core/repo-memory.js';
 export * from './core/review-engine.js';
 export * from './core/chat-engine.js';
 export * from './core/git-utils.js';

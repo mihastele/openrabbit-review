@@ -209,6 +209,8 @@ export type ChatCommandType =
   | 'summary'
   | 'config'
   | 'resolve'
+  | 'ignore'
+  | 'remember'
   | 'question';
 
 export interface ChatRequest {
@@ -218,6 +220,8 @@ export interface ChatRequest {
   line?: number;
   findingContext?: InlineFinding;
   prTitle?: string;
+  repoPath?: string;
+  memoryFilePath?: string;
 }
 
 export interface ChatResponse {
