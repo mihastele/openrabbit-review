@@ -38,12 +38,22 @@ export interface PathInstruction {
   instructions: string;
 }
 
+export interface SecurityScannersConfig {
+  enabled: boolean;
+  semgrep: boolean;
+  trivy: boolean;
+  gitleaks: boolean;
+  timeout_ms: number;
+  diff_only: boolean;
+}
+
 export interface OpenRabbitConfig {
   language: string;
   profile: ReviewProfile;
   tone_instructions: string;
   early_access?: boolean;
   reviewer?: ReviewerExecutionMode;
+  security_scanners?: SecurityScannersConfig;
   static_analysis?: {
     enabled: boolean;
     builtinRules: {
@@ -185,6 +195,10 @@ export interface ReviewResult {
   findings: InlineFinding[];
   markdownWalkthrough: string;
   rawDiff?: string;
+  scannerTelemetry?: {
+    scannersRun: string[];
+    scannersSkipped: string[];
+  };
 }
 
 export type ChatCommandType =

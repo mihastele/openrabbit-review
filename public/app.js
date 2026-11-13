@@ -15,6 +15,62 @@
   let currentFsBrowseData = null;
   let selectedFsFolder = null;
   let fsCallback = null;
+  let gateRequest = 0;
+
+  async function updateReviewGate() {
+    const request = ++gateRequest;
+    const status = document.getElementById('reviewGateStatus');
+    status.removeAttribute('data-status');
+    if (!currentReview) {
+      status.textContent = 'Load a review to check its status.';
+      return;
+    }
+    status.textContent = 'Checking…';
+    const threshold = document.getElementById('selectFailureThreshold').value;
+    try {
+      const response = await fetch(`/api/reviews/${encodeURIComponent(currentReview.id)}/gate?threshold=${encodeURIComponent(threshold)}`);
+      const data = await response.json();
+      if (request !== gateRequest) return;
+      if (!response.ok) throw new Error(data.error || 'Could not check review status.');
+      status.dataset.status = data.status;
+      status.textContent = data.status === 'advisory' ? 'Advisory — no failure threshold'
+        : data.status === 'failed' ? 'Failed — findings meet the threshold'
+        : 'Passed — no findings meet the threshold';
+    } catch (error) {
+      if (request === gateRequest) status.textContent = error.message;
+    }
+  }
+
+  document.getElementById('selectFailureThreshold').addEventListener('change', updateReviewGate);
+  document.getElementById('btnDownloadReport').addEventListener('click', async () => {
+    if (!currentReview) return;
+    const button = document.getElementById('btnDownloadReport');
+    const status = document.getElementById('reportDownloadStatus');
+    const reviewId = currentReview.id;
+    const format = document.getElementById('selectReportFormat').value;
+    button.disabled = true;
+    status.textContent = 'Preparing download…';
+    try {
+      const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/export?format=${format}`);
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Download failed.');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `openrabbit-${reviewId}.${format === 'markdown' ? 'md' : format}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      status.textContent = 'Report downloaded.';
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      button.disabled = !currentReview;
+    }
+  });
 
 
   if (typeof mermaid !== 'undefined') {
@@ -150,10 +206,18 @@
     .getElementById('textareaDiff')
     .addEventListener('input', updateDiffLineCounter);
 
+  function showStudioReviewStatus(message, isError = false) {
+    const status = document.getElementById('studioReviewStatus');
+    status.textContent = message;
+    status.classList.toggle('hidden', !message);
+    status.classList.toggle('error', isError);
+  }
+
   async function executeReview() {
     const btn = document.getElementById('btnRunReview');
     const originalText = btn.innerHTML;
     btn.disabled = true;
+    showStudioReviewStatus('');
     btn.innerHTML = '<span>⏳</span> Analyzing Diff & Generating Walkthrough...';
 
     try {
@@ -179,15 +243,14 @@
         }),
       });
       const data = await res.json();
-      if (data.error) {
-        alert(data.error);
-        return;
-      }
+      if (!res.ok || data.error) throw new Error(data.error || 'Review failed.');
+      if (!data.review) throw new Error('Review returned no result.');
       currentReview = data.review;
       currentParsedDiff = data.parsedDiff;
       renderReviewStudio(currentReview, currentParsedDiff);
     } catch (err) {
       console.error('Review error:', err);
+      showStudioReviewStatus(`Review failed: ${err.message}`, true);
     } finally {
       btn.disabled = false;
       btn.innerHTML = originalText;
@@ -198,18 +261,27 @@
 
   document.getElementById('btnReviewLocalGit').addEventListener('click', async () => {
     const btn = document.getElementById('btnReviewLocalGit');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    showStudioReviewStatus('');
     btn.textContent = '⏳ Reading git diff...';
     try {
       const res = await fetch('/api/review/local', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          profile: document.getElementById('selectProfile').value,
+          provider: document.getElementById('selectProvider').value,
+          reviewer: document.getElementById('selectReviewerMode').value,
+        }),
       });
       const data = await res.json();
       if (data.empty) {
-        alert(data.message);
+        showStudioReviewStatus(data.message);
         return;
       }
+      if (!res.ok || data.error) throw new Error(data.error || 'Local review failed.');
+      if (!data.review) throw new Error('Local review returned no result.');
       if (data.review) {
         document.getElementById('inputPrTitle').value = data.review.prTitle;
         document.getElementById('inputRepoName').value = data.review.repository;
@@ -219,8 +291,11 @@
         currentParsedDiff = data.parsedDiff;
         renderReviewStudio(currentReview, currentParsedDiff);
       }
+    } catch (err) {
+      showStudioReviewStatus(`Local review failed: ${err.message}`, true);
     } finally {
-      btn.textContent = '📂 Review Local Git Diff';
+      btn.disabled = false;
+      btn.textContent = originalText;
     }
   });
 
@@ -240,6 +315,9 @@
   }
 
   async function renderReviewStudio(review, parsedDiff) {
+    document.getElementById('btnDownloadReport').disabled = false;
+    document.getElementById('reportDownloadStatus').textContent = '';
+    updateReviewGate();
     const w = review.walkthrough;
     document.getElementById('viewPrTitle').textContent = review.prTitle;
     document.getElementById('viewRepoTag').textContent = `${review.repository}${
@@ -333,10 +411,27 @@
     `;
 
     // Render Annotated Diff with Inline Findings
-    renderAnnotatedDiffWithFindings(parsedDiff, review.findings);
+    renderFilteredFindings();
   }
 
-  function renderAnnotatedDiffWithFindings(parsedDiff, findings) {
+  function renderFilteredFindings() {
+    if (!currentReview) return;
+    const severity = document.getElementById('findingSeverityFilter').value;
+    const category = document.getElementById('findingCategoryFilter').value;
+    const filesOnly = document.getElementById('findingFilesOnly').checked;
+    const all = currentReview.findings || [];
+    const matched = all.filter((finding) =>
+      (severity === 'all' || finding.severity === severity) &&
+      (category === 'all' || finding.category === category));
+    document.getElementById('findingFilterStatus').textContent = `Showing ${matched.length} of ${all.length} findings`;
+    renderAnnotatedDiffWithFindings(currentParsedDiff, matched, filesOnly);
+  }
+
+  ['findingSeverityFilter', 'findingCategoryFilter', 'findingFilesOnly'].forEach((id) => {
+    document.getElementById(id).addEventListener('change', renderFilteredFindings);
+  });
+
+  function renderAnnotatedDiffWithFindings(parsedDiff, findings, filesOnly = false) {
     const container = document.getElementById('annotatedDiffContainer');
     container.innerHTML = '';
 
@@ -345,7 +440,12 @@
       return;
     }
 
-    parsedDiff.files.forEach((file) => {
+    const files = filesOnly ? parsedDiff.files.filter((file) => findings.some((f) => f.file === file.newPath)) : parsedDiff.files;
+    if (files.length === 0) {
+      container.innerHTML = '<div class="code-preview">No files have findings matching these filters.</div>';
+      return;
+    }
+    files.forEach((file) => {
       const fileBlock = document.createElement('div');
       fileBlock.className = 'diff-file-block';
 
@@ -2055,6 +2155,36 @@
   });
   document.getElementById('btnReviewStaged')?.addEventListener('click', () => {
     if (selectedRepository) reviewRepositoryStaged(selectedRepository.id);
+  });
+  document.getElementById('btnSecurityScan')?.addEventListener('click', async () => {
+    if (!selectedRepository) return;
+    const button = document.getElementById('btnSecurityScan');
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Scanning…';
+    try {
+      const res = await fetch('/api/repos/security-scan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: selectedRepository.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Security scan failed.');
+      currentReview = data.review;
+      currentParsedDiff = data.parsedDiff;
+      document.getElementById('textareaDiff').value = data.review.rawDiff || '';
+      document.getElementById('inputPrTitle').value = data.review.prTitle;
+      document.getElementById('inputRepoName').value = data.review.repository;
+      updateDiffLineCounter();
+      switchToTab('studio');
+      showStudioReviewStatus('');
+      renderReviewStudio(currentReview, currentParsedDiff);
+    } catch (error) {
+      switchToTab('studio');
+      showStudioReviewStatus(`Security scan failed: ${error.message}`, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
   });
 
   // =========================================================================

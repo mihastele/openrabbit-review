@@ -157,6 +157,7 @@
           <button class="btn btn-primary btn-block btn-lg" id="btnRunReview">
             <span>🐇</span> Run OpenRabbit PR Review
           </button>
+          <div id="studioReviewStatus" class="save-toast hidden" role="status" aria-live="polite"></div>
         </aside>
 
         <!-- Right Main Area: PR Walkthrough + Line-by-Line Inline Review -->
@@ -179,6 +180,31 @@
           </div>
 
           <!-- Raw GitHub Markdown Modal/Drawer (Collapsible) -->
+          <div class="card review-report-toolbar" aria-label="Review reports and severity gate">
+            <div class="review-gate-controls">
+              <label class="field-label" for="selectFailureThreshold">Fail review on</label>
+              <select id="selectFailureThreshold" class="input">
+                <option value="none">Never (advisory)</option>
+                <option value="critical">Critical findings</option>
+                <option value="warning">Warning or above</option>
+                <option value="suggestion">Suggestion or above</option>
+                <option value="nitpick">Any issue</option>
+              </select>
+              <span id="reviewGateStatus" class="mono-hint" role="status" aria-live="polite">Load a review to check its status.</span>
+            </div>
+            <div class="review-download-controls">
+              <label class="field-label" for="selectReportFormat">Report format</label>
+              <select id="selectReportFormat" class="input">
+                <option value="sarif">SARIF</option>
+                <option value="json">JSON</option>
+                <option value="markdown">Markdown</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" id="btnDownloadReport" disabled>Download report</button>
+              <span id="reportDownloadStatus" class="mono-hint" role="status" aria-live="polite"></span>
+            </div>
+            <p class="mono-hint review-gate-hint">Checks the displayed review. Changing the threshold updates its status without running another review.</p>
+          </div>
+
           <div class="card hidden" id="rawMarkdownCard">
             <div class="card-header">
               <h3>📄 Exact GitHub / GitLab Sticky Walkthrough Markdown</h3>
@@ -256,6 +282,31 @@
               <div class="severity-legend" id="viewSeverityBreakdown"></div>
             </div>
 
+            <div class="finding-filters" aria-label="Filter findings">
+              <label for="findingSeverityFilter">Severity</label>
+              <select id="findingSeverityFilter" class="input">
+                <option value="all">All severities</option>
+                <option value="critical">Critical</option>
+                <option value="warning">Warning</option>
+                <option value="suggestion">Suggestion</option>
+                <option value="nitpick">Nitpick</option>
+                <option value="praise">Praise</option>
+              </select>
+              <label for="findingCategoryFilter">Category</label>
+              <select id="findingCategoryFilter" class="input">
+                <option value="all">All categories</option>
+                <option value="security">Security</option>
+                <option value="bug">Bug</option>
+                <option value="performance">Performance</option>
+                <option value="maintainability">Maintainability</option>
+                <option value="type-safety">Type safety</option>
+                <option value="logic">Logic</option>
+                <option value="architecture">Architecture</option>
+                <option value="testing">Testing</option>
+              </select>
+              <label class="finding-files-toggle"><input id="findingFilesOnly" type="checkbox"> Only files with matching findings</label>
+              <span id="findingFilterStatus" class="mono-hint" role="status" aria-live="polite"></span>
+            </div>
             <div id="annotatedDiffContainer" class="annotated-diff-container"></div>
           </div>
 
@@ -367,6 +418,7 @@
                   <button class="btn btn-secondary btn-xs" id="btnReviewStaged">
                     <span>📦</span> Review Staged
                   </button>
+                  <button class="btn btn-secondary btn-xs" id="btnSecurityScan" title="Scan tracked working-tree text files with offline security rules">🛡️ Security Scan</button>
                 </div>
               </div>
             </div>

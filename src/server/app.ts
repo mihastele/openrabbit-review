@@ -30,6 +30,9 @@ import {
   resolveActiveProvider,
 } from '../core/llm-provider.js';
 import { runPullRequestReview } from '../core/review-engine.js';
+import { ReviewJobQueue } from '../core/job-queue.js';
+import { buildRepositorySecurityDiff } from '../core/repository-security-scan.js';
+import { exceedsFailureThreshold, formatSarifReport, type FailureThreshold } from '../core/sarif-formatter.js';
 import {
   handleBitbucketWebhookEvent,
   runBitbucketOnDemandReview,
@@ -100,10 +103,46 @@ export async function createOpenRabbitServer(options: {
   storageDir?: string;
 } = {}): Promise<ServerInstance> {
   const workspaceDir = options.workspaceDir || process.cwd();
-  const store = new ReviewStore(
-    options.storageDir || path.join(workspaceDir, 'data')
-  );
+  const resolvedStorageDir = options.storageDir || path.join(workspaceDir, 'data');
+  const store = new ReviewStore(resolvedStorageDir);
   await store.init();
+
+  interface WebhookJobPayload {
+    provider: 'github' | 'gitlab' | 'bitbucket';
+    eventName: string;
+    payload: any;
+  }
+
+  const executeWebhook = async (jobPayload: WebhookJobPayload) => {
+    const { config } = loadConfig(workspaceDir);
+    let result: { handled: boolean; message?: string; reviewResult?: any };
+    if (jobPayload.provider === 'github') {
+      result = await handleGitHubWebhookEvent(jobPayload.eventName, jobPayload.payload, config);
+    } else if (jobPayload.provider === 'gitlab') {
+      result = await handleGitLabWebhookEvent(jobPayload.eventName, jobPayload.payload, config);
+    } else {
+      result = await handleBitbucketWebhookEvent(jobPayload.eventName, jobPayload.payload, config);
+    }
+    if (result.reviewResult) {
+      await store.addReview(result.reviewResult);
+      if (result.reviewResult.prNumber && result.reviewResult.commitSha) {
+        await store.upsertPRReviewState({
+          repository: result.reviewResult.repository,
+          prNumber: result.reviewResult.prNumber,
+          lastReviewedSha: result.reviewResult.commitSha,
+          lastReviewId: result.reviewResult.id,
+        });
+      }
+    }
+    return result;
+  };
+
+  const jobQueue = new ReviewJobQueue<WebhookJobPayload, { handled: boolean; message?: string; reviewResult?: any }>({
+    concurrency: 2,
+    maxAttempts: 2,
+    persistPath: path.join(resolvedStorageDir, 'jobs.json'),
+    processor: async (job) => executeWebhook(job.payload),
+  });
 
   const publicDirCandidates = [
     path.join(workspaceDir, 'public'),
@@ -170,10 +209,44 @@ export async function createOpenRabbitServer(options: {
       }
 
       if (pathname.startsWith('/api/reviews/') && req.method === 'GET') {
-        const id = pathname.slice('/api/reviews/'.length);
+        const [id, action, extra] = pathname.slice('/api/reviews/'.length).split('/');
+        if (extra || (action && !['export', 'gate'].includes(action))) {
+          sendJson(res, 404, { error: 'Review endpoint not found' });
+          return;
+        }
         const review = await store.getReviewById(id);
         if (!review) {
           sendJson(res, 404, { error: 'Review not found' });
+          return;
+        }
+        if (action === 'export') {
+          const format = url.searchParams.get('format') || 'sarif';
+          if (!['sarif', 'json', 'markdown'].includes(format)) {
+            sendJson(res, 400, { error: 'Invalid format. Use sarif, json, or markdown.' });
+            return;
+          }
+          const content = format === 'sarif' ? JSON.stringify(formatSarifReport(review), null, 2)
+            : format === 'json' ? JSON.stringify(review, null, 2) : review.markdownWalkthrough;
+          const extension = format === 'markdown' ? 'md' : format;
+          res.writeHead(200, {
+            'Content-Type': format === 'markdown' ? 'text/markdown; charset=utf-8'
+              : format === 'sarif' ? 'application/sarif+json; charset=utf-8' : 'application/json; charset=utf-8',
+            'Content-Disposition': `attachment; filename="openrabbit-${review.id.replace(/[^a-zA-Z0-9_-]/g, '_')}.${extension}"`,
+          });
+          res.end(content + '\n');
+          return;
+        }
+        if (action === 'gate') {
+          const threshold = url.searchParams.get('threshold') || 'none';
+          if (!['none', 'critical', 'warning', 'suggestion', 'nitpick'].includes(threshold)) {
+            sendJson(res, 400, { error: 'Invalid threshold. Use none, critical, warning, suggestion, or nitpick.' });
+            return;
+          }
+          sendJson(res, 200, {
+            threshold,
+            status: threshold === 'none' ? 'advisory'
+              : exceedsFailureThreshold(review.findings, threshold as FailureThreshold) ? 'failed' : 'passed',
+          });
           return;
         }
         const parsedDiff = review.rawDiff
@@ -243,6 +316,7 @@ export async function createOpenRabbitServer(options: {
         const body = JSON.parse(rawBody || '{}');
         const localInfo = getLocalGitDiff({
           cwd: workspaceDir,
+          strict: true,
           staged: Boolean(body.staged),
           baseBranch: body.baseBranch,
         });
@@ -251,7 +325,7 @@ export async function createOpenRabbitServer(options: {
           sendJson(res, 200, {
             empty: true,
             message:
-              'No uncommitted git changes or commits found in the local repository. Try loading one of the sample PR diffs or modifying a file!',
+              'No tracked changes found in the local repository. Modify a tracked file or load a sample diff.',
           });
           return;
         }
@@ -798,6 +872,26 @@ export async function createOpenRabbitServer(options: {
         return;
       }
 
+      if (pathname === '/api/repos/security-scan' && req.method === 'POST') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        const target = body.id || body.path || workspaceDir;
+        const repo = await store.getRepository(target);
+        const repoDir = repo ? repo.path : path.resolve(target);
+        const { config } = loadConfig(repoDir);
+        if (config.static_analysis?.enabled === false) throw new Error('Enable static analysis to run a repository security scan.');
+        config.profile = 'security-focused';
+        config.reviewer = 'static-only';
+        const scan = buildRepositorySecurityDiff(repoDir, config.reviews.path_filters);
+        const review = await runPullRequestReview({
+          rawDiff: scan.diff, prTitle: 'Repository security scan',
+          repository: repo?.name || path.basename(repoDir), source: 'playground', config,
+          securityScanScope: { skippedFiles: scan.skippedFiles },
+        });
+        await store.addReview(review);
+        sendJson(res, 200, { review, parsedDiff: parseUnifiedDiff(scan.diff), scan: { scannedFiles: scan.scannedFiles, skippedFiles: scan.skippedFiles } });
+        return;
+      }
+
       // ======================================================================
       // On-Demand Integrations Review Endpoints (GitHub, GitLab, Bitbucket)
       // ======================================================================
@@ -894,8 +988,57 @@ export async function createOpenRabbitServer(options: {
       }
 
       // ======================================================================
+      // Async Review Job Queue Endpoints
+      // ======================================================================
+      if (pathname === '/api/jobs' && req.method === 'GET') {
+        const limit = Number(url.searchParams.get('limit') || '50');
+        sendJson(res, 200, { jobs: jobQueue.listJobs(Number.isFinite(limit) ? limit : 50) });
+        return;
+      }
+
+      if (pathname.startsWith('/api/jobs/') && req.method === 'GET') {
+        const jobId = decodeURIComponent(pathname.slice('/api/jobs/'.length));
+        const job = jobQueue.getJob(jobId);
+        if (!job) {
+          sendJson(res, 404, { error: 'Job not found' });
+          return;
+        }
+        sendJson(res, 200, { job });
+        return;
+      }
+
+      // ======================================================================
       // Webhook Endpoints (GitHub, GitLab, Bitbucket)
       // ======================================================================
+      const isAsyncWebhook =
+        url.searchParams.get('async') === 'true' ||
+        req.headers['x-openrabbit-async'] === 'true' ||
+        process.env.OPENRABBIT_ASYNC_WEBHOOKS === 'true';
+
+      const dispatchWebhook = async (
+        provider: 'github' | 'gitlab' | 'bitbucket',
+        eventName: string,
+        payload: any,
+        dedupKey: string
+      ) => {
+        if (isAsyncWebhook) {
+          const { job, deduplicated } = jobQueue.enqueue(dedupKey, {
+            provider,
+            eventName,
+            payload,
+          });
+          sendJson(res, 202, {
+            accepted: true,
+            jobId: job.id,
+            status: job.status,
+            deduplicated,
+          });
+          return;
+        }
+        const result = await executeWebhook({ provider, eventName, payload });
+        sendJson(res, 200, result);
+      };
+
       if (pathname === '/api/webhooks/github' && req.method === 'POST') {
         const rawBody = await readBody(req);
         const sigHeader = req.headers['x-hub-signature-256'] as
@@ -916,12 +1059,8 @@ export async function createOpenRabbitServer(options: {
         }
 
         const payload = JSON.parse(rawBody || '{}');
-        const { config } = loadConfig(workspaceDir);
-        const result = await handleGitHubWebhookEvent(eventName, payload, config);
-        if (result.reviewResult) {
-          await store.addReview(result.reviewResult);
-        }
-        sendJson(res, 200, result);
+        const dedupKey = `github:${payload.repository?.full_name || 'unknown'}:${payload.pull_request?.number || payload.number || 0}:${payload.pull_request?.head?.sha || eventName}`;
+        await dispatchWebhook('github', eventName, payload, dedupKey);
         return;
       }
 
@@ -942,16 +1081,8 @@ export async function createOpenRabbitServer(options: {
         }
 
         const payload = JSON.parse(rawBody || '{}');
-        const { config } = loadConfig(workspaceDir);
-        const result = await handleGitLabWebhookEvent(
-          eventHeader,
-          payload,
-          config
-        );
-        if (result.reviewResult) {
-          await store.addReview(result.reviewResult);
-        }
-        sendJson(res, 200, result);
+        const dedupKey = `gitlab:${payload.project?.path_with_namespace || 'unknown'}:${payload.object_attributes?.iid || 0}:${payload.object_attributes?.last_commit?.id || eventHeader}`;
+        await dispatchWebhook('gitlab', eventHeader, payload, dedupKey);
         return;
       }
 
@@ -974,16 +1105,8 @@ export async function createOpenRabbitServer(options: {
         }
 
         const payload = JSON.parse(rawBody || '{}');
-        const { config } = loadConfig(workspaceDir);
-        const result = await handleBitbucketWebhookEvent(
-          eventKey,
-          payload,
-          config
-        );
-        if (result.reviewResult) {
-          await store.addReview(result.reviewResult);
-        }
-        sendJson(res, 200, result);
+        const dedupKey = `bitbucket:${payload.repository?.full_name || 'unknown'}:${payload.pullrequest?.id || 0}:${payload.pullrequest?.source?.commit?.hash || eventKey}`;
+        await dispatchWebhook('bitbucket', eventKey, payload, dedupKey);
         return;
       }
 

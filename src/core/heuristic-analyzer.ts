@@ -119,7 +119,7 @@ export function runHeuristicInlineReview(
   }
 
   // If a PR has clean additions and no issues were flagged, add a constructive architectural observation or praise
-  if (findings.length === 0 && files.length > 0) {
+  if (findings.length === 0 && files.length > 0 && config.profile !== 'security-focused') {
     const primaryFile = files.find((f) => f.hunks.length > 0) || files[0];
     const firstHunk = primaryFile.hunks[0];
     const firstAdd = firstHunk?.lines.find((l) => l.type === 'add');

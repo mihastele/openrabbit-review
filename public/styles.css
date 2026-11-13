@@ -1756,3 +1756,36 @@ input:checked + .toggle-slider:before {
 
 
 
+.review-report-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+
+.review-gate-controls, .review-download-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-report-toolbar .input { width: auto; max-width: 100%; }
+.review-report-toolbar .field-label { margin: 0; }
+.review-gate-hint { flex-basis: 100%; margin: 0; }
+#reviewGateStatus[data-status="passed"] { color: #4ade80; }
+#reviewGateStatus[data-status="failed"] { color: #fb7185; }
+
+.finding-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.finding-filters .input { width: auto; max-width: 100%; }
+.finding-files-toggle { display: inline-flex; align-items: center; gap: 6px; }
+

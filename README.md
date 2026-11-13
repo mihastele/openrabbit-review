@@ -147,6 +147,100 @@ npx tsx src/cli/index.ts chat "@openrabbit generate unit tests"
 npx tsx src/cli/index.ts chat "@openrabbit fix this vulnerability"
 ```
 
+### Security-focused reviews
+
+Select **Security-Focused** in the PR Review Studio or run:
+
+```bash
+npx tsx src/cli/index.ts review --base origin/main --profile security-focused --provider heuristic --format sarif --output security.sarif --fail-on warning
+```
+
+This mode reports security-category findings from the changed files and filters
+out style and other non-security comments. It includes offline checks for common
+injection, hardcoded credentials, disabled TLS and JWT verification, and weak
+password hashing patterns, along with enabled security custom rules. With an LLM
+provider configured, it also requests security-focused analysis of the diff.
+Findings are candidates for human review, not proof of exploitability; an empty
+result does not establish that the repository is secure. This mode reviews the
+diff; it does not verify cross-file attack paths or query vulnerability databases.
+
+To scan existing tracked working-tree files with the offline security rules, select
+a repository in **Local Repos & Commits** and click **Security Scan**, or run:
+
+```bash
+npx tsx src/cli/index.ts review --repo-path /path/to/repo --security-scan --format sarif --output security.sarif --fail-on warning
+```
+
+This scans current working-tree content, including tracked edits. Untracked,
+deleted, binary, symlink, empty, and path-filtered files are skipped and counted
+in the report. It does not follow submodules or perform cross-file analysis.
+Files over 1 MiB or a total above 12 MiB cause an error so the scan cannot silently
+claim complete coverage. Narrow the configured `reviews.path_filters` if needed.
+Results and source content are stored in the local review history like other reviews.
+
+### CI reports and severity gates
+
+In the **PR Review Studio**, use **Fail review on** to check the displayed review
+against a severity threshold, then choose **SARIF**, **JSON**, or **Markdown** and
+click **Download report**. Downloads remain available when the review fails.
+The threshold is a preview for the displayed review; use `--fail-on` in your CI
+command to enforce it in a pipeline. It also works when opening saved reviews
+from history or reviews created through repository and remote integrations.
+Use the severity and category filters above the diff to focus on particular findings,
+or show only files with matching findings. Filters change the display; downloads and
+severity gates continue to use the complete review.
+
+Export a SARIF 2.1.0 report for code scanning tools, with no API key required:
+
+```bash
+npx tsx src/cli/index.ts review --base origin/main --provider heuristic --format sarif --output openrabbit.sarif --fail-on warning
+```
+
+`--fail-on` sets the minimum severity that returns exit code `1`: `critical`,
+`warning`, `suggestion`, or `nitpick`. The default, `none`, keeps reviews advisory.
+Praise never fails a review. The report is written even when the threshold is met;
+invalid options or execution errors also return `1`, with diagnostics on stderr.
+An empty diff produces an empty review; sample findings require an explicit `--demo`.
+
+`--output <path>` writes UTF-8 to an existing parent directory and works with all
+formats: `terminal`, `markdown`, `json`, and `sarif`. Without it, the report goes to
+stdout. These options work for local diffs, commits, ranges, and remote reviews.
+SARIF exports actionable findings with rule IDs, severity, and file locations;
+praise is excluded. Original review severities and categories are preserved in
+each result's properties.
+
+To add code scanning to an existing GitHub Actions job that checks out the code
+with full history and installs OpenRabbit's dependencies:
+
+```yaml
+# Job permissions (SARIF uploads from fork PRs may have restricted permissions):
+permissions:
+  contents: read
+  security-events: write
+
+# Append these steps to the job's steps:
+steps:
+  - name: Review changes
+    env:
+      BASE_REF: ${{ github.base_ref }}
+    run: >-
+      npx tsx src/cli/index.ts review --base "origin/$BASE_REF"
+      --provider heuristic --format sarif --output openrabbit.sarif
+      --fail-on warning
+  - name: Upload code scanning results
+    if: ${{ !cancelled() && hashFiles('openrabbit.sarif') != '' }}
+    uses: github/codeql-action/upload-sarif@v4
+    with:
+      sarif_file: openrabbit.sarif
+      category: openrabbit
+```
+
+This example is for `pull_request` jobs. The upload step runs even when the review
+fails its severity gate, while the job retains its failure status. GitHub's
+[SARIF upload documentation](https://docs.github.com/en/code-security/how-tos/scan-code-for-vulnerabilities/integrate-with-existing-tools/uploading-a-sarif-file-to-github)
+describes repository requirements and upload permissions. OpenRabbit reviews the
+selected diff, so this reports findings in changed code rather than a full-repository scan.
+
 ### 2. Launch the Interactive Web Dashboard & Webhook Server (`openrabbit serve`)
 
 ```bash

@@ -12,6 +12,14 @@ export const DEFAULT_OPENRABBIT_CONFIG: OpenRabbitConfig = {
     'Be constructive, concise, and high-signal. Prioritize real bugs, security vulnerabilities, race conditions, and performance bottlenecks over stylistic nitpicks.',
   early_access: true,
   reviewer: 'hybrid',
+  security_scanners: {
+    enabled: true,
+    semgrep: true,
+    trivy: true,
+    gitleaks: true,
+    timeout_ms: 30000,
+    diff_only: true,
+  },
   static_analysis: {
     enabled: true,
     builtinRules: {
@@ -224,6 +232,23 @@ export function mergeConfig(
     override.reviewer === 'llm-only'
   ) {
     merged.reviewer = override.reviewer;
+  }
+
+  if (override.security_scanners && typeof override.security_scanners === 'object') {
+    if (!merged.security_scanners) {
+      merged.security_scanners = structuredClone(
+        DEFAULT_OPENRABBIT_CONFIG.security_scanners!
+      );
+    }
+    const ss = override.security_scanners;
+    if (typeof ss.enabled === 'boolean') merged.security_scanners.enabled = ss.enabled;
+    if (typeof ss.semgrep === 'boolean') merged.security_scanners.semgrep = ss.semgrep;
+    if (typeof ss.trivy === 'boolean') merged.security_scanners.trivy = ss.trivy;
+    if (typeof ss.gitleaks === 'boolean') merged.security_scanners.gitleaks = ss.gitleaks;
+    if (typeof ss.timeout_ms === 'number' && ss.timeout_ms > 0) {
+      merged.security_scanners.timeout_ms = ss.timeout_ms;
+    }
+    if (typeof ss.diff_only === 'boolean') merged.security_scanners.diff_only = ss.diff_only;
   }
 
   if (override.static_analysis && typeof override.static_analysis === 'object') {

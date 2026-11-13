@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import {
   DEFAULT_OPENRABBIT_CONFIG,
@@ -18,6 +19,71 @@ import { createOpenRabbitServer } from '../src/server/app.js';
 import { SAMPLE_DIFF_TEMPLATES } from '../src/storage/review-store.js';
 
 describe('OpenRabbit Core Suite', () => {
+  it('runs a focused security review on changed lines without claiming a clean repository is secure', async () => {
+    const config = structuredClone(DEFAULT_OPENRABBIT_CONFIG);
+    config.profile = 'security-focused';
+    config.llm.provider = 'heuristic';
+    const diff = `diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -0,0 +1,5 @@\n+const client = { rejectUnauthorized: false };\n+const options = { verify_signature: false };\n+const digest = md5(password);\n+const count: any = 1;\n+const enabled = true;\n`;
+    const result = await runPullRequestReview({ rawDiff: diff, config });
+    assert.deepEqual(result.findings.map((f) => f.ruleMatched).sort(),
+      ['sec-jwt-signature-disabled', 'sec-tls-verification-disabled', 'sec-weak-crypto-hash']);
+    assert.ok(result.findings.every((f) => f.category === 'security'));
+    assert.equal(result.walkthrough.securityConcerns.length, 3);
+    assert.match(result.walkthrough.executiveSummary, /does not establish/);
+    const clean = await runPullRequestReview({ rawDiff: diff.replace(/\+const client[^\n]*\n|\+const options[^\n]*\n|\+const digest[^\n]*\n/g, ''), config });
+    assert.deepEqual(clean.findings, []);
+    assert.match(clean.walkthrough.executiveSummary, /human verification/);
+  });
+  it('reviews local changes using selected settings and reports a clean working tree', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openrabbit-local-review-'));
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: tmpDir, stdio: 'pipe' });
+    git('init');
+    fs.writeFileSync(path.join(tmpDir, 'example.ts'), 'export const value = 1;\n');
+    git('add', 'example.ts');
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', 'commit', '-m', 'initial');
+    const server = await createOpenRabbitServer({ port: 0, workspaceDir: tmpDir, storageDir: path.join(tmpDir, 'data') });
+    const review = (options: object) => fetch(`http://localhost:${server.port}/api/review/local`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options),
+    });
+    try {
+      const clean = await review({ provider: 'heuristic', reviewer: 'static-only' });
+      assert.equal(clean.status, 200);
+      assert.equal((await clean.json()).empty, true);
+      fs.writeFileSync(path.join(tmpDir, 'example.ts'), 'export const value: any = 2;\n');
+      const response = await review({ profile: 'assertive', provider: 'heuristic', reviewer: 'static-only' });
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.equal(result.review.providerUsed, 'heuristic');
+      assert.ok(result.review.rawDiff.includes('value: any'));
+      assert.ok(result.review.findings.some((f: { severity: string }) => f.severity === 'nitpick'));
+      const invalid = await review({ provider: 'heuristic', reviewer: 'llm-only' });
+      assert.equal(invalid.status, 500);
+      assert.match((await invalid.json()).error, /No review engine/);
+      fs.writeFileSync(path.join(tmpDir, 'example.ts'), 'export const client = { rejectUnauthorized: false };\n');
+      fs.writeFileSync(path.join(tmpDir, 'untracked.ts'), 'const x = { rejectUnauthorized: false };\n');
+      const scan = await fetch(`http://localhost:${server.port}/api/repos/security-scan`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: tmpDir }),
+      });
+      assert.equal(scan.status, 200);
+      const report = await scan.json();
+      assert.equal(report.scan.scannedFiles, 1);
+      assert.equal(report.review.findings[0].ruleMatched, 'sec-tls-verification-disabled');
+      assert.equal(report.review.findings[0].file, 'example.ts');
+      assert.match(report.review.walkthrough.executiveSummary, /tracked working-tree/);
+    } finally {
+      await server.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+  it('fails when no reviewer can analyze changes and does not mutate the caller configuration', async () => {
+    const config = structuredClone(DEFAULT_OPENRABBIT_CONFIG);
+    config.llm.provider = 'heuristic';
+    const rawDiff = SAMPLE_DIFF_TEMPLATES[0].diff;
+    await assert.rejects(runPullRequestReview({ rawDiff, config, reviewer: 'llm-only' }), /No review engine/);
+    assert.notEqual(config.reviewer, 'llm-only');
+    config.static_analysis!.enabled = false;
+    await assert.rejects(runPullRequestReview({ rawDiff, config }), /No review engine/);
+  });
   it('parses unified git diffs, line numbers, and changed symbols accurately', () => {
     const sample = SAMPLE_DIFF_TEMPLATES[0].diff;
     const parsed = parseUnifiedDiff(sample);

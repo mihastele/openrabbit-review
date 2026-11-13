@@ -1,5 +1,412 @@
 [
   {
+    "id": "rev-0e54d8a7",
+    "createdAt": "2026-10-19T18:03:54.570Z",
+    "source": "cli",
+    "repository": "LLMs4EU/llms4eu-agentic-search-module",
+    "prTitle": "Commit Review: Commit de8ff7d: CI: optional Telegram/Discord notification step (LLMs4EU/llms4eu-agentic-search-module)",
+    "author": "Setup",
+    "baseBranch": "main",
+    "headBranch": "mihastele/sprint/20261018-20261025",
+    "commitSha": "de8ff7d3155328f3e70cc7e9c154bd3a62943ae5",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 35,
+      "deletions": 0,
+      "findingsCount": 1,
+      "criticalCount": 0,
+      "warningCount": 0,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 1
+    },
+    "walkthrough": {
+      "title": "Commit Review: Commit de8ff7d: CI: optional Telegram/Discord notification step (LLMs4EU/llms4eu-agentic-search-module)",
+      "executiveSummary": "This pull request modifies **1 file** across **.woodpecker** (+35/-0 lines). The changes are clean and well-scoped with no blocking defects found.",
+      "releaseNotes": [
+        {
+          "category": "Enhancements & Refactoring",
+          "items": [
+            ".woodpecker: Updates `FAILED` in .woodpecker (+35/-0)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": ".woodpecker/test.yaml",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 0,
+          "component": ".woodpecker",
+          "summary": "Updates `FAILED` in .woodpecker (+35/-0).",
+          "impact": "medium"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_test_yaml as test.yaml\n  Caller->>+M0_test_yaml: Invoke FAILED()\n  M0_test_yaml-->>-Caller: Return result",
+      "poem": "Across `test.yaml` the fresh patches gleam,\nAs crisp as a carrot beside a clear stream.\nNo tangles or snares in the logic we find—\nHop onward to merge with a confident mind! 🐇🥕",
+      "effortScore": 2,
+      "estimatedMinutes": 4,
+      "riskLevel": "low",
+      "securityConcerns": []
+    },
+    "findings": [
+      {
+        "id": "finding-b3a50129",
+        "file": ".woodpecker/test.yaml",
+        "startLine": 20,
+        "endLine": 20,
+        "severity": "praise",
+        "category": "architecture",
+        "title": "Clean, well-structured implementation with no high-risk anti-patterns",
+        "body": "Reviewed **+35/-0** lines in `.woodpecker/test.yaml` affecting `FAILED`. No security vulnerabilities, unhandled errors, or unsafe resource leaks were detected."
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **.woodpecker** (+35/-0 lines). The changes are clean and well-scoped with no blocking defects found.\n\n### 📋 Summary by OpenRabbit\n- **Enhancements & Refactoring**\n  - .woodpecker: Updates `FAILED` in .woodpecker (+35/-0).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦⬜⬜⬜ (2/5) (~4 min) |\n| **Risk Assessment** | **LOW** (No blocking issues) |\n| **Actionable Comments** | **0** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `.woodpecker/test.yaml` | .woodpecker | `+35/-0` | 🟡 Med | Updates `FAILED` in .woodpecker (+35/-0). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_test_yaml as test.yaml\n  Caller->>+M0_test_yaml: Invoke FAILED()\n  M0_test_yaml-->>-Caller: Return result\n```\n\n</details>\n\n### 🥕 Poem\n> Across `test.yaml` the fresh patches gleam,\n> As crisp as a carrot beside a clear stream.\n> No tangles or snares in the logic we find—\n> Hop onward to merge with a confident mind! 🐇🥕\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/.woodpecker/test.yaml b/.woodpecker/test.yaml\nindex b2fd400..12d4748 100644\n--- a/.woodpecker/test.yaml\n+++ b/.woodpecker/test.yaml\n@@ -17,3 +17,38 @@ steps:\n         set -eu\n         for v in $(grep -ho '\\${[A-Z_]*:?' docker-compose*.yml | tr -d '${:?' | sort -u); do export \"$v=ci\"; done\n         for f in docker-compose*.yml; do docker compose --env-file .env.example -f \"$f\" config -q; echo \"ok $f\"; done\n+\n+  # Optional chat notification. Does nothing unless a Telegram bot\n+  # (telegram_bot_token + telegram_chat_id) and/or a Discord webhook\n+  # (discord_webhook_url) is configured as a Woodpecker secret. It can never\n+  # fail the pipeline.\n+  - name: notify\n+    image: docker.io/alpine:3.20\n+    failure: ignore\n+    when:\n+      - status: [success, failure]\n+    environment:\n+      TELEGRAM_BOT_TOKEN:\n+        from_secret: telegram_bot_token\n+      TELEGRAM_CHAT_ID:\n+        from_secret: telegram_chat_id\n+      DISCORD_WEBHOOK_URL:\n+        from_secret: discord_webhook_url\n+    commands:\n+      - |\n+        set -u\n+        TG=0; DC=0\n+        [ -n \"${TELEGRAM_BOT_TOKEN:-}\" ] && [ -n \"${TELEGRAM_CHAT_ID:-}\" ] && TG=1\n+        [ -n \"${DISCORD_WEBHOOK_URL:-}\" ] && DC=1\n+        if [ \"$TG$DC\" = \"00\" ]; then echo \"notifications not configured; skipping\"; exit 0; fi\n+        apk add --no-cache curl >/dev/null\n+        case \"$CI_PIPELINE_STATUS\" in success) ICON=\"OK\";; *) ICON=\"FAILED\";; esac\n+        NL=$(printf '\\n_'); NL=${NL%_}\n+        SUBJECT=$(printf '%s' \"$CI_COMMIT_MESSAGE\" | head -n 1)\n+        TEXT=\"$ICON $CI_REPO | ${CI_WORKFLOW_NAME:-pipeline} | $CI_PIPELINE_STATUS${NL}branch ${CI_COMMIT_BRANCH:-$CI_COMMIT_REF} @ $(printf '%.7s' \"$CI_COMMIT_SHA\") by $CI_COMMIT_AUTHOR${NL}$SUBJECT${NL}$CI_PIPELINE_URL\"\n+        if [ \"$TG\" = 1 ]; then\n+          curl -sS -m 20 -o /dev/null \"${TELEGRAM_API_URL:-https://api.telegram.org}/bot${TELEGRAM_BOT_TOKEN}/sendMessage\"             --data-urlencode \"chat_id=${TELEGRAM_CHAT_ID}\" --data-urlencode \"text=${TEXT}\" -d disable_web_page_preview=true             && echo \"telegram: sent\" || echo \"telegram: FAILED (ignored)\"\n+        fi\n+        if [ \"$DC\" = 1 ]; then\n+          curl -sS -m 20 -o /dev/null \"${DISCORD_WEBHOOK_URL}\" --form-string \"content=${TEXT}\"             && echo \"discord: sent\" || echo \"discord: FAILED (ignored)\"\n+        fi\n\n"
+  },
+  {
+    "id": "rev-57ca8f06",
+    "createdAt": "2026-10-19T18:00:22.326Z",
+    "source": "cli",
+    "repository": "LLMs4EU/llms4eu-agentic-search-module",
+    "prTitle": "Commit Review: Commit 8e782e0: TO REVIEW: AMBIGUITY DETECTION UPDATE (LLMs4EU/llms4eu-agentic-search-module)",
+    "author": "Setup",
+    "baseBranch": "main",
+    "headBranch": "mihastele/sprint/20261018-20261025",
+    "commitSha": "8e782e0b8dc89d6f0040280980c95b846d5c5eba",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 8,
+      "additions": 146,
+      "deletions": 58,
+      "findingsCount": 1,
+      "criticalCount": 0,
+      "warningCount": 0,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 1
+    },
+    "walkthrough": {
+      "title": "Commit Review: Commit 8e782e0: TO REVIEW: AMBIGUITY DETECTION UPDATE (LLMs4EU/llms4eu-agentic-search-module)",
+      "executiveSummary": "This pull request modifies **8 files** across **Root, App, Tests** (+146/-58 lines). The changes are clean and well-scoped with no blocking defects found.",
+      "releaseNotes": [
+        {
+          "category": "Enhancements & Refactoring",
+          "items": [
+            "Root: Refines root logic and configuration (+4/-1 lines).",
+            "Root: Updates `workflow`, `vectors`, `one`, `structured` in Root (+1/-1).",
+            "App: Updates `Settings` in App (+4/-1).",
+            "App: Updates `RetrievalResult`, `AgenticSearchService`, `_step_ambiguity_detection` in App (+32/-10).",
+            "App: Updates `ambiguous` in App (+1/-1)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": ".env.example",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "component": "Root",
+          "summary": "Refines root logic and configuration (+4/-1 lines).",
+          "impact": "low"
+        },
+        {
+          "path": "API_specs.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "component": "Root",
+          "summary": "Updates `workflow`, `vectors`, `one`, `structured` in Root (+1/-1).",
+          "impact": "low"
+        },
+        {
+          "path": "app/config.py",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "component": "App",
+          "summary": "Updates `Settings` in App (+4/-1).",
+          "impact": "low"
+        },
+        {
+          "path": "app/services/agentic_workflow.py",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 10,
+          "component": "App",
+          "summary": "Updates `RetrievalResult`, `AgenticSearchService`, `_step_ambiguity_detection` in App (+32/-10).",
+          "impact": "medium"
+        },
+        {
+          "path": "app/services/prompts.py",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "component": "App",
+          "summary": "Updates `ambiguous` in App (+1/-1).",
+          "impact": "low"
+        },
+        {
+          "path": "app/services/vector_search.py",
+          "status": "modified",
+          "additions": 43,
+          "deletions": 27,
+          "component": "App",
+          "summary": "Updates `calculate_vector_spread`, `len`, `cosine_similarity`, `max`, `range`, `float`, `es_score_to_cosine`, `as`, `prepare_multiple_queries`, `search_candidate_models`, `index`, `compute_embedding` in App (+43/-27).",
+          "impact": "medium"
+        },
+        {
+          "path": "tests/test_langfuse_workflow_tracing.py",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 8,
+          "component": "Tests",
+          "summary": "Updates `_fake_stream`, `_run_workflow`, `range`, `zip`, `test_turn_emits_expected_step_spans_with_results`, `test_retrieval_runs_once_and_feeds_ambiguity_and_rerank`, `test_many_models_close_to_the_best_similarity_asks_a_clarifying_question`, `scores`, `models`, `abs` in Tests (+23/-8).",
+          "impact": "medium"
+        },
+        {
+          "path": "tests/test_vector_search.py",
+          "status": "modified",
+          "additions": 38,
+          "deletions": 9,
+          "component": "Tests",
+          "summary": "Updates `test_calculate_vector_spread_identical_vectors_is_zero`, `calculate_vector_spread`, `test_cosine_similarity_basics`, `cosine_similarity`, `test_calculate_vector_spread_empty_and_single`, `test_es_score_to_cosine_inverts_elasticsearch_scoring`, `es_score_to_cosine`, `test_evaluate_specificity_many_models_near_the_best_is_ambiguous`, `test_evaluate_specificity_one_clear_winner_is_specific`, `test_evaluate_specificity_boundary_counts_models_at_the_cutoff`, `evaluate_specificity`, `test_evaluate_specificity_empty_or_no_positive_match_is_not_ambiguity` in Tests (+38/-9).",
+          "impact": "medium"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_env_example as .env.example\n  participant M1_API_specs_md as API_specs.md\n  participant M2_config_py as config.py\n  participant M3_agentic_workflow_py as agentic_workflow.py\n  Caller->>+M0_env_example: Invoke modified (+4/-1)\n  M0_env_example->>+M1_API_specs_md: Call workflow()\n  M1_API_specs_md->>+M2_config_py: Call Settings()\n  M2_config_py->>+M3_agentic_workflow_py: Call RetrievalResult()\n  M3_agentic_workflow_py-->>-M2_config_py: Propagate state\n  M2_config_py-->>-M1_API_specs_md: Propagate state\n  M1_API_specs_md-->>-M0_env_example: Propagate state\n  M0_env_example-->>-Caller: Return result",
+      "poem": "Across `.env.example` the fresh patches gleam,\nAs crisp as a carrot beside a clear stream.\nNo tangles or snares in the logic we find—\nHop onward to merge with a confident mind! 🐇🥕",
+      "effortScore": 4,
+      "estimatedMinutes": 14,
+      "riskLevel": "moderate",
+      "securityConcerns": []
+    },
+    "findings": [
+      {
+        "id": "finding-7f2a003a",
+        "file": ".env.example",
+        "startLine": 28,
+        "endLine": 28,
+        "severity": "praise",
+        "category": "architecture",
+        "title": "Clean, well-structured implementation with no high-risk anti-patterns",
+        "body": "Reviewed **+4/-1** lines in `.env.example`. No security vulnerabilities, unhandled errors, or unsafe resource leaks were detected."
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **8 files** across **Root, App, Tests** (+146/-58 lines). The changes are clean and well-scoped with no blocking defects found.\n\n### 📋 Summary by OpenRabbit\n- **Enhancements & Refactoring**\n  - Root: Refines root logic and configuration (+4/-1 lines).\n  - Root: Updates `workflow`, `vectors`, `one`, `structured` in Root (+1/-1).\n  - App: Updates `Settings` in App (+4/-1).\n  - App: Updates `RetrievalResult`, `AgenticSearchService`, `_step_ambiguity_detection` in App (+32/-10).\n  - App: Updates `ambiguous` in App (+1/-1).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦🟦🟦⬜ (4/5) (~14 min) |\n| **Risk Assessment** | **MODERATE** (No blocking issues) |\n| **Actionable Comments** | **0** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (8 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `.env.example` | Root | `+4/-1` | 🟢 Low | Refines root logic and configuration (+4/-1 lines). |\n| `API_specs.md` | Root | `+1/-1` | 🟢 Low | Updates `workflow`, `vectors`, `one`, `structured` in Root (+1/-1). |\n| `app/config.py` | App | `+4/-1` | 🟢 Low | Updates `Settings` in App (+4/-1). |\n| `app/services/agentic_workflow.py` | App | `+32/-10` | 🟡 Med | Updates `RetrievalResult`, `AgenticSearchService`, `_step_ambiguity_detection` in App (+32/-10). |\n| `app/services/prompts.py` | App | `+1/-1` | 🟢 Low | Updates `ambiguous` in App (+1/-1). |\n| `app/services/vector_search.py` | App | `+43/-27` | 🟡 Med | Updates `calculate_vector_spread`, `len`, `cosine_similarity`, `max`, `range`, `float`, `es_score_to_cosine`, `as`, `prepare_multiple_queries`, `search_candidate_models`, `index`, `compute_embedding` in App (+43/-27). |\n| `tests/test_langfuse_workflow_tracing.py` | Tests | `+23/-8` | 🟡 Med | Updates `_fake_stream`, `_run_workflow`, `range`, `zip`, `test_turn_emits_expected_step_spans_with_results`, `test_retrieval_runs_once_and_feeds_ambiguity_and_rerank`, `test_many_models_close_to_the_best_similarity_asks_a_clarifying_question`, `scores`, `models`, `abs` in Tests (+23/-8). |\n| `tests/test_vector_search.py` | Tests | `+38/-9` | 🟡 Med | Updates `test_calculate_vector_spread_identical_vectors_is_zero`, `calculate_vector_spread`, `test_cosine_similarity_basics`, `cosine_similarity`, `test_calculate_vector_spread_empty_and_single`, `test_es_score_to_cosine_inverts_elasticsearch_scoring`, `es_score_to_cosine`, `test_evaluate_specificity_many_models_near_the_best_is_ambiguous`, `test_evaluate_specificity_one_clear_winner_is_specific`, `test_evaluate_specificity_boundary_counts_models_at_the_cutoff`, `evaluate_specificity`, `test_evaluate_specificity_empty_or_no_positive_match_is_not_ambiguity` in Tests (+38/-9). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_env_example as .env.example\n  participant M1_API_specs_md as API_specs.md\n  participant M2_config_py as config.py\n  participant M3_agentic_workflow_py as agentic_workflow.py\n  Caller->>+M0_env_example: Invoke modified (+4/-1)\n  M0_env_example->>+M1_API_specs_md: Call workflow()\n  M1_API_specs_md->>+M2_config_py: Call Settings()\n  M2_config_py->>+M3_agentic_workflow_py: Call RetrievalResult()\n  M3_agentic_workflow_py-->>-M2_config_py: Propagate state\n  M2_config_py-->>-M1_API_specs_md: Propagate state\n  M1_API_specs_md-->>-M0_env_example: Propagate state\n  M0_env_example-->>-Caller: Return result\n```\n\n</details>\n\n### 🥕 Poem\n> Across `.env.example` the fresh patches gleam,\n> As crisp as a carrot beside a clear stream.\n> No tangles or snares in the logic we find—\n> Hop onward to merge with a confident mind! 🐇🥕\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/.env.example b/.env.example\nindex 836f1f8..87be913 100644\n--- a/.env.example\n+++ b/.env.example\n@@ -25,7 +25,10 @@ ES_CONNECTION_MAX_DELAY_SECONDS=30.0\n ES_CONNECTION_RESTART_DELAY_SECONDS=60.0\n \n # Agent Specific Parameters\n-AMBIGUITY_THRESHOLD=0.5\n+# Ambiguous when more than MAX_CLOSE_MODELS retrieved models have a query\n+# similarity >= CLOSE_RATIO * the best model's similarity.\n+AMBIGUITY_CLOSE_RATIO=0.9\n+AMBIGUITY_MAX_CLOSE_MODELS=3\n TOP_K_CANDIDATES=5\n CACHE_FILE=llm_cache.json\n \ndiff --git a/API_specs.md b/API_specs.md\nindex f9ac445..568a671 100644\n--- a/API_specs.md\n+++ b/API_specs.md\n@@ -240,7 +240,7 @@ The prototype workflow implemented in [`experimental_files_2/conversational_agen\n | **Step 1: Intent Classification** | `handle_intent_classification` (`IntentClassificationResponse`) | Uses `INTENT_CLASSIFICATION_RPROMPT` to verify if the prompt pertains to catalogue search. | `{\"type\": \"thinking\", \"text\": \"Verified intent: Model catalogue search.\"}` | If irrelevant: returns explanation text, `referencedModels: []`, `results: []`. |\n | **Step 1a: Irrelevant Query** | `handle_irrelevant_intent` (`IrrelevantIntentEvent`) | Generates helpful guidance on what the catalogue search can do. | `{\"type\": \"thinking\", \"text\": \"Query out of scope. Providing guidance.\"}` | `content`: Scope guidance markdown; `results`: `[]`. |\n | **Step 2: Multi-query Retrieval** | `_step_multi_query_retrieval` (`search_candidate_models`) | LLM expands prompt into 4 sub-queries (specs, hardware, languages, domain), embeds, queries Elasticsearch `model-vectors` kNN. Runs once per turn; its candidates serve Steps 3 and 4. | `{\"type\": \"tool_call\", \"text\": \"multi_query_vector_search(queries=4, top_k=5)\"}` | Candidate models + vectors retrieved. |\n-| **Step 3: Ambiguity Detection** | `_step_ambiguity_detection` (`evaluate_specificity`) | Computes average cosine spread of the already-retrieved vectors (no LLM/index call). | `{\"type\": \"tool_call\", \"text\": \"evaluate_prompt_specificity(spread=0.22, threshold=0.50)\"}` | If spread > threshold: triggers Step 3a. |\n+| **Step 3: Ambiguity Detection** | `_step_ambiguity_detection` (`evaluate_specificity`) | Counts how many retrieved models have a query similarity within `AMBIGUITY_CLOSE_RATIO` (0.9) of the best one (no LLM/index call). | `{\"type\": \"tool_call\", \"text\": \"evaluate_prompt_specificity(close_models=2, max=3, ratio=0.90)\"}` | If close models > `AMBIGUITY_MAX_CLOSE_MODELS` (3): triggers Step 3a. |\n | **Step 3a: Clarifying Questions** | `handle_unspecific_query` (`UnspecificQueryEvent`) | Uses `UNSPECIFIC_RESPONSE_RPROMPT` to generate follow-up clarifying questions for the user. | `{\"type\": \"thinking\", \"text\": \"Query too broad in vector space. Asking clarifying questions.\"}` | `content`: Clarification markdown text; `results`: `[]`; `referencedModels`: `[]`. |\n | **Step 4: Filtering & Reranking** | `filter_and_rerank_models` (`FilteringRerankingResponse`) | LLM evaluates candidate summaries against user constraints; selects top $\\le 3$ model IDs in rank order. | `{\"type\": \"thinking\", \"text\": \"Reranked candidate models. Selected top 3 matches.\"}` | Models tagged with `isAgenticPick=True` and `isTopPick=True` (for #1). |\n | **Step 5: Final Response Synthesis** | `generate_final_response` (`FinalResponseEvent`) | Uses `FINAL_RESPONSE_RPROMPT` to construct structured markdown, model comparisons, and citations. | `{\"type\": \"thinking\", \"text\": \"Synthesized comparative analysis and recommendations.\"}` | Final payload with `content`, `referencedModels`, `results`, and complete `trace`. |\ndiff --git a/app/config.py b/app/config.py\nindex d6247b8..266e26e 100644\n--- a/app/config.py\n+++ b/app/config.py\n@@ -41,7 +41,10 @@ class Settings(BaseSettings):\n     )\n \n     # Agent Specific Parameters\n-    AMBIGUITY_THRESHOLD: float = float(os.getenv(\"AMBIGUITY_THRESHOLD\", \"0.5\"))\n+    # A prompt is ambiguous when more than AMBIGUITY_MAX_CLOSE_MODELS retrieved\n+    # models have a query similarity >= AMBIGUITY_CLOSE_RATIO * the best similarity.\n+    AMBIGUITY_CLOSE_RATIO: float = float(os.getenv(\"AMBIGUITY_CLOSE_RATIO\", \"0.9\"))\n+    AMBIGUITY_MAX_CLOSE_MODELS: int = int(os.getenv(\"AMBIGUITY_MAX_CLOSE_MODELS\", \"3\"))\n     TOP_K_CANDIDATES: int = int(os.getenv(\"TOP_K_CANDIDATES\", \"5\"))\n     # Only the best-ranked catalogue hits are sent to the LLM reranker; the\n     # remainder are still shown on the results page, just not reranked.\ndiff --git a/app/services/agentic_workflow.py b/app/services/agentic_workflow.py\nindex 67a2a28..35b4546 100644\n--- a/app/services/agentic_workflow.py\n+++ b/app/services/agentic_workflow.py\n@@ -56,6 +56,7 @@ class RetrievalResult:\n     candidates: list[ModelCard]\n     vectors: list[list[float]]\n     generated_queries: str\n+    similarities: list[float]\n \n \n @dataclass\n@@ -302,7 +303,7 @@ class AgenticSearchService:\n             as_type=\"retriever\",\n             input={\"user_prompt\": ctx.user_prompt, \"top_k\": ctx.limit},\n         ) as span:\n-            candidates, vectors, generated_queries = await search_candidate_models(\n+            candidates, vectors, generated_queries, similarities = await search_candidate_models(\n                 ctx.user_prompt, ctx.formatted_history, top_k=ctx.limit\n             )\n             set_span_output(\n@@ -323,10 +324,18 @@ class AgenticSearchService:\n             \"search\",\n             f\"Vector search returned {len(candidates)} candidate models.\",\n         )\n-        return RetrievalResult(candidates=candidates, vectors=vectors, generated_queries=generated_queries)\n+        return RetrievalResult(\n+            candidates=candidates,\n+            vectors=vectors,\n+            generated_queries=generated_queries,\n+            similarities=similarities,\n+        )\n \n     async def _step_ambiguity_detection(self, ctx: WorkflowContext, retrieval: RetrievalResult) -> bool:\n-        \"\"\"Step 3: Judge prompt specificity from the spread of the retrieved vectors.\n+        \"\"\"Step 3: Judge prompt specificity from the retrieved models' similarities.\n+\n+        The prompt is ambiguous when many models score close to the best one\n+        (similarity >= AMBIGUITY_CLOSE_RATIO * max similarity).\n \n         Reuses the Step 2 retrieval; makes no LLM or index calls of its own.\n         \"\"\"\n@@ -334,14 +343,26 @@ class AgenticSearchService:\n             \"ambiguity-detection\",\n             as_type=\"evaluator\",\n             input={\"candidate_model_ids\": [c.id for c in retrieval.candidates]},\n-            metadata={\"threshold\": settings.AMBIGUITY_THRESHOLD},\n+            metadata={\n+                \"close_ratio\": settings.AMBIGUITY_CLOSE_RATIO,\n+                \"max_close_models\": settings.AMBIGUITY_MAX_CLOSE_MODELS,\n+            },\n         ) as span:\n-            spread, is_specific_enough = evaluate_specificity(retrieval.vectors, settings.AMBIGUITY_THRESHOLD)\n+            close_count, is_specific_enough = evaluate_specificity(\n+                retrieval.similarities,\n+                settings.AMBIGUITY_CLOSE_RATIO,\n+                settings.AMBIGUITY_MAX_CLOSE_MODELS,\n+            )\n+            max_similarity = max(retrieval.similarities, default=None)\n             set_span_output(\n                 span,\n                 {\n-                    \"spread_score\": spread,\n-                    \"threshold\": settings.AMBIGUITY_THRESHOLD,\n+                    \"max_similarity\": max_similarity,\n+                    \"similarity_cutoff\": (\n+                        settings.AMBIGUITY_CLOSE_RATIO * max_similarity if max_similarity is not None else None\n+                    ),\n+                    \"close_model_count\": close_count,\n+                    \"max_close_models\": settings.AMBIGUITY_MAX_CLOSE_MODELS,\n                     \"is_specific_enough\": is_specific_enough,\n                 },\n             )\n@@ -349,7 +370,8 @@ class AgenticSearchService:\n         ctx.tool_call_count += 1\n         await ctx.emitter.emit_trace_step(\n             \"tool_call\",\n-            f\"evaluate_prompt_specificity(spread={spread:.3f}, threshold={settings.AMBIGUITY_THRESHOLD:.2f})\",\n+            f\"evaluate_prompt_specificity(close_models={close_count}, max={settings.AMBIGUITY_MAX_CLOSE_MODELS}, \"\n+            f\"ratio={settings.AMBIGUITY_CLOSE_RATIO:.2f})\",\n         )\n         return is_specific_enough\n \n@@ -357,7 +379,7 @@ class AgenticSearchService:\n         \"\"\"Handle queries that are too vague/ambiguous.\"\"\"\n         await ctx.emitter.emit_trace_step(\n             \"thinking\",\n-            \"Retrieved vectors are spread apart. Generating clarifying questions to narrow down requirements.\",\n+            \"Many retrieved models match about equally well. Generating clarifying questions to narrow down requirements.\",\n         )\n         unspecific_template, unspecific_prompt_ref = await resolve_prompt(\n             UNSPECIFIC_RESPONSE_PROMPT_NAME, UNSPECIFIC_RESPONSE_TEMPLATE\n@@ -370,7 +392,7 @@ class AgenticSearchService:\n         with trace_span(\n             \"clarifying-question\",\n             input={\"user_prompt\": ctx.user_prompt},\n-            metadata={\"trigger\": \"retrieved vectors too spread out\"},\n+            metadata={\"trigger\": \"many models close to the best similarity\"},\n         ) as span:\n             async for chunk in llm_client.predict_stream(\n                 unspecific_prompt,\ndiff --git a/app/services/prompts.py b/app/services/prompts.py\nindex f69a33a..a1806a5 100644\n--- a/app/services/prompts.py\n+++ b/app/services/prompts.py\n@@ -55,7 +55,7 @@ Prepare a response to the user explaining that:\n \n UNSPECIFIC_RESPONSE_PROMPT_NAME = \"agentic-search/unspecific-response\"\n UNSPECIFIC_RESPONSE_TEMPLATE = \"\"\"\n-The user asked a question about searching the model catalogue, but their request is too broad or ambiguous (the retrieved models are too spread apart in vector space).\n+The user asked a question about searching the model catalogue, but their request is too broad or ambiguous (many retrieved models match the request about equally well).\n \n Conversation History:\n {chat_history}\ndiff --git a/app/services/vector_search.py b/app/services/vector_search.py\nindex 04fcb3d..8e8eed8 100644\n--- a/app/services/vector_search.py\n+++ b/app/services/vector_search.py\n@@ -85,27 +85,20 @@ SAMPLE_MODELS = [\n ]\n \n \n-def calculate_vector_spread(vectors: list[list[float]]) -> float:\n-    \"\"\"Calculates average pairwise cosine distance between vectors.\"\"\"\n-    if len(vectors) < 2:\n+def cosine_similarity(a: list[float], b: list[float]) -> float:\n+    \"\"\"Cosine similarity of two vectors, clamped to [-1, 1]; 0.0 for a zero vector.\"\"\"\n+    va, vb = np.asarray(a, dtype=float), np.asarray(b, dtype=float)\n+    norm = float(np.linalg.norm(va) * np.linalg.norm(vb))\n+    if norm == 0.0 or va.shape != vb.shape:\n         return 0.0\n+    return max(-1.0, min(1.0, float(np.dot(va, vb) / norm)))\n \n-    np_vectors = [np.array(v) for v in vectors if len(v) > 0]\n-    if len(np_vectors) < 2:\n-        return 0.0\n-\n-    distances = []\n-    for i in range(len(np_vectors)):\n-        for j in range(i + 1, len(np_vectors)):\n-            norm_i = np.linalg.norm(np_vectors[i])\n-            norm_j = np.linalg.norm(np_vectors[j])\n-            if norm_i > 0 and norm_j > 0:\n-                cosine_sim = float(np.dot(np_vectors[i], np_vectors[j]) / (norm_i * norm_j))\n-                # Clamp to [-1.0, 1.0] to prevent floating point domain errors\n-                cosine_sim = max(-1.0, min(1.0, cosine_sim))\n-                distances.append(1.0 - cosine_sim)\n \n-    return float(np.mean(distances)) if distances else 0.0\n+def es_score_to_cosine(score: float | None) -> float | None:\n+    \"\"\"Elasticsearch scores a cosine kNN hit as (1 + cosine) / 2; undo that.\"\"\"\n+    if score is None:\n+        return None\n+    return 2.0 * float(score) - 1.0\n \n \n async def prepare_multiple_queries(user_prompt: str, chat_history: str) -> str:\n@@ -159,13 +152,17 @@ async def search_candidate_models(\n     user_prompt: str,\n     chat_history: str,\n     top_k: int = 5,\n-) -> tuple[list[ModelCard], list[list[float]], str]:\n+) -> tuple[list[ModelCard], list[list[float]], str, list[float]]:\n     \"\"\"Expands query, embeds it, and runs a kNN search against the\n     `model-vectors` Elasticsearch index (the single vector store).\n \n     Vector hits are hydrated into full model cards from the `offers` index.\n     Falls back to the predefined catalogue samples when the vector index is\n     empty or unreachable.\n+\n+    Also returns, per candidate, its cosine similarity to the query embedding\n+    (used by `evaluate_specificity`). Candidates without a known similarity\n+    are omitted from that list.\n     \"\"\"\n     generated_prompts = await prepare_multiple_queries(user_prompt, chat_history)\n     query_vector = await compute_embedding(generated_prompts)\n@@ -179,6 +176,7 @@ async def search_candidate_models(\n \n         candidates: list[ModelCard] = []\n         vectors: list[list[float]] = []\n+        similarities: list[float] = []\n         retrieved: list[dict[str, Any]] = []\n \n         if hits:\n@@ -205,6 +203,9 @@ async def search_candidate_models(\n                         \"score\": hit.get(\"_score\"),\n                     }\n                 )\n+                similarity = es_score_to_cosine(hit.get(\"_score\"))\n+                if similarity is not None:\n+                    similarities.append(similarity)\n                 embedding = hit.get(\"_source\", {}).get(\"embedding\")\n                 if embedding:\n                     vectors.append(embedding)\n@@ -215,6 +216,7 @@ async def search_candidate_models(\n             # Generate dummy spread vectors for candidates\n             for model in candidates:\n                 vectors.append(await compute_embedding(f\"{model.title} {model.description}\"))\n+                similarities.append(cosine_similarity(query_vector, vectors[-1]))\n             retrieved = [{\"id\": model.id, \"title\": model.title, \"score\": None} for model in candidates]\n \n         set_span_output(\n@@ -226,14 +228,28 @@ async def search_candidate_models(\n             },\n         )\n \n-    return candidates, vectors, generated_prompts\n+    return candidates, vectors, generated_prompts, similarities\n \n \n def evaluate_specificity(\n-    vectors: list[list[float]],\n-    threshold: float = settings.AMBIGUITY_THRESHOLD,\n-) -> tuple[float, bool]:\n-    \"\"\"Judges whether the prompt is specific enough from the spread of the\n-    already-retrieved vectors. Pure computation: no LLM or index calls.\"\"\"\n-    spread = calculate_vector_spread(vectors)\n-    return spread, spread <= threshold\n+    similarities: list[float],\n+    close_ratio: float = settings.AMBIGUITY_CLOSE_RATIO,\n+    max_close_models: int = settings.AMBIGUITY_MAX_CLOSE_MODELS,\n+) -> tuple[int, bool]:\n+    \"\"\"Judges whether the prompt is specific enough from the query-to-model\n+    similarities of the retrieved models. Pure computation: no LLM or index calls.\n+\n+    The prompt is ambiguous when many models are about as similar to the query\n+    as the best one: more than `max_close_models` models have a similarity of at\n+    least `close_ratio * max(similarities)`. Returns\n+    `(close_model_count, is_specific_enough)`.\n+    \"\"\"\n+    if not similarities:\n+        return 0, True\n+    best = max(similarities)\n+    if best <= 0.0:\n+        # Nothing resembles the query: that is \"no match\", not ambiguity.\n+        return 0, True\n+    cutoff = close_ratio * best - 1e-9  # tolerance: 0.9 * 0.8 != 0.72 in floats\n+    close = sum(1 for sim in similarities if sim >= cutoff)\n+    return close, close <= max_close_models\ndiff --git a/tests/test_langfuse_workflow_tracing.py b/tests/test_langfuse_workflow_tracing.py\nindex 2e8f822..31328bc 100644\n--- a/tests/test_langfuse_workflow_tracing.py\n+++ b/tests/test_langfuse_workflow_tracing.py\n@@ -48,7 +48,7 @@ def _fake_stream(chunks):\n     return _gen\n \n \n-def _run_workflow(client):\n+def _run_workflow(client, scores=(0.9, 0.8)):\n     service = AgenticSearchService()\n     request = ChatRequest(\n         message=\"Find a multilingual model for Slovene to English translation\",\n@@ -75,14 +75,12 @@ def _run_workflow(client):\n         \"app.services.agentic_workflow.llm_client.predict_stream\",\n         side_effect=_fake_stream([\"Final \", \"answer\"]),\n     ):\n+        ids = [f\"m-{i + 1}\" for i in range(len(scores))]\n         mock_es.knn_search.return_value = [\n-            {\"_source\": {\"embedding\": [0.1, 0.2], \"metadata\": {\"document_id\": \"m-1\"}}, \"_score\": 0.9},\n-            {\"_source\": {\"embedding\": [0.2, 0.1], \"metadata\": {\"document_id\": \"m-2\"}}, \"_score\": 0.8},\n+            {\"_source\": {\"embedding\": [0.1, 0.2], \"metadata\": {\"document_id\": i}}, \"_score\": sc}\n+            for i, sc in zip(ids, scores)\n         ]\n-        mock_es.mget_offers.return_value = {\n-            \"m-1\": {\"name\": [{\"value\": \"Model One\"}]},\n-            \"m-2\": {\"name\": [{\"value\": \"Model Two\"}]},\n-        }\n+        mock_es.mget_offers.return_value = {i: {\"name\": [{\"value\": f\"Model {i}\"}]} for i in ids}\n         emitter = AgentEventEmitter()\n         asyncio.run(service.execute_workflow_stream(request, emitter))\n \n@@ -109,7 +107,8 @@ def test_turn_emits_expected_step_spans_with_results():\n     assert intent_update[\"output\"][\"question_is_relevant\"] is True\n \n     ambiguity_update = by_name[\"ambiguity-detection\"].updates[-1]\n-    assert \"spread_score\" in ambiguity_update[\"output\"]\n+    assert \"close_model_count\" in ambiguity_update[\"output\"]\n+    assert \"max_similarity\" in ambiguity_update[\"output\"]\n     assert \"generated_queries\" not in ambiguity_update[\"output\"]\n \n     vector_update = by_name[\"vector-retrieval\"].updates[-1]\n@@ -147,3 +146,19 @@ def test_retrieval_runs_once_and_feeds_ambiguity_and_rerank():\n \n     rerank_input = by_name[\"filtering-reranking\"].kwargs[\"input\"]\n     assert [c[\"id\"] for c in rerank_input[\"candidates_sent_to_llm\"]] == [\"m-1\", \"m-2\"]\n+\n+\n+def test_many_models_close_to_the_best_similarity_asks_a_clarifying_question():\n+    \"\"\"ES scores (1+cos)/2: 0.90/0.89/0.89/0.88 -> cosines 0.80/0.78/0.78/0.76\n+    are all >= 0.9 * 0.80, i.e. 4 close models (> 3): ambiguous, no reranking.\"\"\"\n+    client = _RecordingClient()\n+    _run_workflow(client, scores=(0.90, 0.89, 0.89, 0.88))\n+\n+    names = [span.name for span in client.spans]\n+    assert \"clarifying-question\" in names\n+    assert \"filtering-reranking\" not in names\n+\n+    ambiguity = {span.name: span for span in client.spans}[\"ambiguity-detection\"].updates[-1][\"output\"]\n+    assert ambiguity[\"close_model_count\"] == 4\n+    assert ambiguity[\"is_specific_enough\"] is False\n+    assert abs(ambiguity[\"max_similarity\"] - 0.80) < 1e-9\ndiff --git a/tests/test_vector_search.py b/tests/test_vector_search.py\nindex 9aff496..8e323ac 100644\n--- a/tests/test_vector_search.py\n+++ b/tests/test_vector_search.py\n@@ -4,20 +4,49 @@ from unittest.mock import AsyncMock, patch\n from app.schemas.agentic import ModelCard\n from app.services.vector_search import (\n     SAMPLE_MODELS,\n-    calculate_vector_spread,\n+    cosine_similarity,\n+    es_score_to_cosine,\n+    evaluate_specificity,\n     offer_doc_to_model_card,\n     search_candidate_models,\n )\n from app.services.catalogue_search import build_recommendation_facets\n \n \n-def test_calculate_vector_spread_identical_vectors_is_zero():\n-    assert calculate_vector_spread([[1.0, 0.0], [1.0, 0.0]]) == 0.0\n+def test_cosine_similarity_basics():\n+    assert cosine_similarity([1.0, 0.0], [1.0, 0.0]) == 1.0\n+    assert cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0\n+    assert cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0\n \n \n-def test_calculate_vector_spread_empty_and_single():\n-    assert calculate_vector_spread([]) == 0.0\n-    assert calculate_vector_spread([[0.1, 0.2]]) == 0.0\n+def test_es_score_to_cosine_inverts_elasticsearch_scoring():\n+    assert es_score_to_cosine(1.0) == 1.0\n+    assert es_score_to_cosine(0.5) == 0.0\n+    assert es_score_to_cosine(None) is None\n+\n+\n+def test_evaluate_specificity_many_models_near_the_best_is_ambiguous():\n+    # best 0.80 -> cutoff 0.72 (ratio 0.9): 0.80, 0.78, 0.75, 0.73 are close.\n+    close, specific = evaluate_specificity([0.80, 0.78, 0.75, 0.73, 0.40], 0.9, 3)\n+    assert close == 4\n+    assert specific is False\n+\n+\n+def test_evaluate_specificity_one_clear_winner_is_specific():\n+    close, specific = evaluate_specificity([0.80, 0.55, 0.50, 0.45, 0.40], 0.9, 3)\n+    assert close == 1\n+    assert specific is True\n+\n+\n+def test_evaluate_specificity_boundary_counts_models_at_the_cutoff():\n+    # cutoff is 0.9 * 0.8 = 0.72; a model exactly at the cutoff is close.\n+    assert evaluate_specificity([0.8, 0.72, 0.72, 0.72], 0.9, 3) == (4, False)\n+    assert evaluate_specificity([0.8, 0.72, 0.72, 0.71], 0.9, 3) == (3, True)\n+\n+\n+def test_evaluate_specificity_empty_or_no_positive_match_is_not_ambiguity():\n+    assert evaluate_specificity([], 0.9, 3) == (0, True)\n+    assert evaluate_specificity([-0.1, -0.2, -0.3, -0.4, -0.5], 0.9, 3) == (0, True)\n \n \n def test_offer_doc_to_model_card_maps_offers_fields():\n@@ -99,7 +128,7 @@ def test_search_candidate_models_uses_es_knn_and_hydrates_offers():\n         mock_es.knn_search.return_value = es_hits\n         mock_es.mget_offers.return_value = offers\n \n-        candidates, vectors, prompt = asyncio.run(\n+        candidates, vectors, prompt, similarities = asyncio.run(\n             search_candidate_models(\"find models\", \"None\", top_k=2)\n         )\n \n@@ -124,7 +153,7 @@ def test_search_candidate_models_falls_back_to_samples_when_index_empty():\n         mock_es.knn_search.return_value = []\n         mock_es.mget_offers.return_value = {}\n \n-        candidates, vectors, _ = asyncio.run(\n+        candidates, vectors, _, similarities = asyncio.run(\n             search_candidate_models(\"find models\", \"None\", top_k=2)\n         )\n \n@@ -150,7 +179,7 @@ def test_search_candidate_models_skips_hits_without_hydrated_offer():\n             \"present\": {\"name\": [{\"value\": \"Model P\"}], \"description\": [{\"value\": \"d\"}]},\n         }\n \n-        candidates, vectors, _ = asyncio.run(\n+        candidates, vectors, _, similarities = asyncio.run(\n             search_candidate_models(\"find models\", \"None\", top_k=2)\n         )\n\n"
+  },
+  {
+    "id": "rev-c86291cd",
+    "createdAt": "2026-10-19T17:59:32.912Z",
+    "source": "cli",
+    "repository": "LLMs4EU/lds-fc-ui-complete-fork",
+    "prTitle": "Commit Review: Commit 83abfb3: CI: optional Telegram/Discord notification step (LLMs4EU/lds-fc-ui-complete-fork)",
+    "author": "Miha",
+    "baseBranch": "main",
+    "headBranch": "mihastele/sprint/20261018-20261025",
+    "commitSha": "83abfb3769a15cd53c3477307e9c1fae0d65a66d",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 35,
+      "deletions": 0,
+      "findingsCount": 1,
+      "criticalCount": 0,
+      "warningCount": 0,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 1
+    },
+    "walkthrough": {
+      "title": "Commit Review: Commit 83abfb3: CI: optional Telegram/Discord notification step (LLMs4EU/lds-fc-ui-complete-fork)",
+      "executiveSummary": "This pull request modifies **1 file** across **.woodpecker** (+35/-0 lines). The changes are clean and well-scoped with no blocking defects found.",
+      "releaseNotes": [
+        {
+          "category": "Enhancements & Refactoring",
+          "items": [
+            ".woodpecker: Updates `FAILED` in .woodpecker (+35/-0)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": ".woodpecker/test.yaml",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 0,
+          "component": ".woodpecker",
+          "summary": "Updates `FAILED` in .woodpecker (+35/-0).",
+          "impact": "medium"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_test_yaml as test.yaml\n  Caller->>+M0_test_yaml: Invoke FAILED()\n  M0_test_yaml-->>-Caller: Return result",
+      "poem": "Across `test.yaml` the fresh patches gleam,\nAs crisp as a carrot beside a clear stream.\nNo tangles or snares in the logic we find—\nHop onward to merge with a confident mind! 🐇🥕",
+      "effortScore": 2,
+      "estimatedMinutes": 4,
+      "riskLevel": "low",
+      "securityConcerns": []
+    },
+    "findings": [
+      {
+        "id": "finding-871e7c44",
+        "file": ".woodpecker/test.yaml",
+        "startLine": 28,
+        "endLine": 28,
+        "severity": "praise",
+        "category": "architecture",
+        "title": "Clean, well-structured implementation with no high-risk anti-patterns",
+        "body": "Reviewed **+35/-0** lines in `.woodpecker/test.yaml` affecting `FAILED`. No security vulnerabilities, unhandled errors, or unsafe resource leaks were detected."
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **.woodpecker** (+35/-0 lines). The changes are clean and well-scoped with no blocking defects found.\n\n### 📋 Summary by OpenRabbit\n- **Enhancements & Refactoring**\n  - .woodpecker: Updates `FAILED` in .woodpecker (+35/-0).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦⬜⬜⬜ (2/5) (~4 min) |\n| **Risk Assessment** | **LOW** (No blocking issues) |\n| **Actionable Comments** | **0** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `.woodpecker/test.yaml` | .woodpecker | `+35/-0` | 🟡 Med | Updates `FAILED` in .woodpecker (+35/-0). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_test_yaml as test.yaml\n  Caller->>+M0_test_yaml: Invoke FAILED()\n  M0_test_yaml-->>-Caller: Return result\n```\n\n</details>\n\n### 🥕 Poem\n> Across `test.yaml` the fresh patches gleam,\n> As crisp as a carrot beside a clear stream.\n> No tangles or snares in the logic we find—\n> Hop onward to merge with a confident mind! 🐇🥕\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/.woodpecker/test.yaml b/.woodpecker/test.yaml\nindex 19fb999..ff9cf6f 100644\n--- a/.woodpecker/test.yaml\n+++ b/.woodpecker/test.yaml\n@@ -25,3 +25,38 @@ steps:\n       CI: \"false\"\n     commands:\n       - npm run build\n+\n+  # Optional chat notification. Does nothing unless a Telegram bot\n+  # (telegram_bot_token + telegram_chat_id) and/or a Discord webhook\n+  # (discord_webhook_url) is configured as a Woodpecker secret. It can never\n+  # fail the pipeline.\n+  - name: notify\n+    image: docker.io/alpine:3.20\n+    failure: ignore\n+    when:\n+      - status: [success, failure]\n+    environment:\n+      TELEGRAM_BOT_TOKEN:\n+        from_secret: telegram_bot_token\n+      TELEGRAM_CHAT_ID:\n+        from_secret: telegram_chat_id\n+      DISCORD_WEBHOOK_URL:\n+        from_secret: discord_webhook_url\n+    commands:\n+      - |\n+        set -u\n+        TG=0; DC=0\n+        [ -n \"${TELEGRAM_BOT_TOKEN:-}\" ] && [ -n \"${TELEGRAM_CHAT_ID:-}\" ] && TG=1\n+        [ -n \"${DISCORD_WEBHOOK_URL:-}\" ] && DC=1\n+        if [ \"$TG$DC\" = \"00\" ]; then echo \"notifications not configured; skipping\"; exit 0; fi\n+        apk add --no-cache curl >/dev/null\n+        case \"$CI_PIPELINE_STATUS\" in success) ICON=\"OK\";; *) ICON=\"FAILED\";; esac\n+        NL=$(printf '\\n_'); NL=${NL%_}\n+        SUBJECT=$(printf '%s' \"$CI_COMMIT_MESSAGE\" | head -n 1)\n+        TEXT=\"$ICON $CI_REPO | ${CI_WORKFLOW_NAME:-pipeline} | $CI_PIPELINE_STATUS${NL}branch ${CI_COMMIT_BRANCH:-$CI_COMMIT_REF} @ $(printf '%.7s' \"$CI_COMMIT_SHA\") by $CI_COMMIT_AUTHOR${NL}$SUBJECT${NL}$CI_PIPELINE_URL\"\n+        if [ \"$TG\" = 1 ]; then\n+          curl -sS -m 20 -o /dev/null \"${TELEGRAM_API_URL:-https://api.telegram.org}/bot${TELEGRAM_BOT_TOKEN}/sendMessage\"             --data-urlencode \"chat_id=${TELEGRAM_CHAT_ID}\" --data-urlencode \"text=${TEXT}\" -d disable_web_page_preview=true             && echo \"telegram: sent\" || echo \"telegram: FAILED (ignored)\"\n+        fi\n+        if [ \"$DC\" = 1 ]; then\n+          curl -sS -m 20 -o /dev/null \"${DISCORD_WEBHOOK_URL}\" --form-string \"content=${TEXT}\"             && echo \"discord: sent\" || echo \"discord: FAILED (ignored)\"\n+        fi\n\n"
+  },
+  {
+    "id": "rev-25477f46",
+    "createdAt": "2026-10-19T17:59:03.003Z",
+    "source": "cli",
+    "repository": "LLMs4EU/lds-fc-ui-complete-fork",
+    "prTitle": "Local Review: Latest commit (HEAD) (mihastele/sprint/20261018-20261025)",
+    "author": "Miha",
+    "baseBranch": "main",
+    "headBranch": "mihastele/sprint/20261018-20261025",
+    "commitSha": "83abfb3769a15cd53c3477307e9c1fae0d65a66d",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 35,
+      "deletions": 0,
+      "findingsCount": 1,
+      "criticalCount": 0,
+      "warningCount": 0,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 1
+    },
+    "walkthrough": {
+      "title": "Local Review: Latest commit (HEAD) (mihastele/sprint/20261018-20261025)",
+      "executiveSummary": "This pull request modifies **1 file** across **.woodpecker** (+35/-0 lines). The changes are clean and well-scoped with no blocking defects found.",
+      "releaseNotes": [
+        {
+          "category": "Enhancements & Refactoring",
+          "items": [
+            ".woodpecker: Updates `FAILED` in .woodpecker (+35/-0)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": ".woodpecker/test.yaml",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 0,
+          "component": ".woodpecker",
+          "summary": "Updates `FAILED` in .woodpecker (+35/-0).",
+          "impact": "medium"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_test_yaml as test.yaml\n  Caller->>+M0_test_yaml: Invoke FAILED()\n  M0_test_yaml-->>-Caller: Return result",
+      "poem": "Across `test.yaml` the fresh patches gleam,\nAs crisp as a carrot beside a clear stream.\nNo tangles or snares in the logic we find—\nHop onward to merge with a confident mind! 🐇🥕",
+      "effortScore": 2,
+      "estimatedMinutes": 4,
+      "riskLevel": "low",
+      "securityConcerns": []
+    },
+    "findings": [
+      {
+        "id": "finding-163bf751",
+        "file": ".woodpecker/test.yaml",
+        "startLine": 28,
+        "endLine": 28,
+        "severity": "praise",
+        "category": "architecture",
+        "title": "Clean, well-structured implementation with no high-risk anti-patterns",
+        "body": "Reviewed **+35/-0** lines in `.woodpecker/test.yaml` affecting `FAILED`. No security vulnerabilities, unhandled errors, or unsafe resource leaks were detected."
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **.woodpecker** (+35/-0 lines). The changes are clean and well-scoped with no blocking defects found.\n\n### 📋 Summary by OpenRabbit\n- **Enhancements & Refactoring**\n  - .woodpecker: Updates `FAILED` in .woodpecker (+35/-0).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦⬜⬜⬜ (2/5) (~4 min) |\n| **Risk Assessment** | **LOW** (No blocking issues) |\n| **Actionable Comments** | **0** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `.woodpecker/test.yaml` | .woodpecker | `+35/-0` | 🟡 Med | Updates `FAILED` in .woodpecker (+35/-0). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_test_yaml as test.yaml\n  Caller->>+M0_test_yaml: Invoke FAILED()\n  M0_test_yaml-->>-Caller: Return result\n```\n\n</details>\n\n### 🥕 Poem\n> Across `test.yaml` the fresh patches gleam,\n> As crisp as a carrot beside a clear stream.\n> No tangles or snares in the logic we find—\n> Hop onward to merge with a confident mind! 🐇🥕\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/.woodpecker/test.yaml b/.woodpecker/test.yaml\nindex 19fb999..ff9cf6f 100644\n--- a/.woodpecker/test.yaml\n+++ b/.woodpecker/test.yaml\n@@ -25,3 +25,38 @@ steps:\n       CI: \"false\"\n     commands:\n       - npm run build\n+\n+  # Optional chat notification. Does nothing unless a Telegram bot\n+  # (telegram_bot_token + telegram_chat_id) and/or a Discord webhook\n+  # (discord_webhook_url) is configured as a Woodpecker secret. It can never\n+  # fail the pipeline.\n+  - name: notify\n+    image: docker.io/alpine:3.20\n+    failure: ignore\n+    when:\n+      - status: [success, failure]\n+    environment:\n+      TELEGRAM_BOT_TOKEN:\n+        from_secret: telegram_bot_token\n+      TELEGRAM_CHAT_ID:\n+        from_secret: telegram_chat_id\n+      DISCORD_WEBHOOK_URL:\n+        from_secret: discord_webhook_url\n+    commands:\n+      - |\n+        set -u\n+        TG=0; DC=0\n+        [ -n \"${TELEGRAM_BOT_TOKEN:-}\" ] && [ -n \"${TELEGRAM_CHAT_ID:-}\" ] && TG=1\n+        [ -n \"${DISCORD_WEBHOOK_URL:-}\" ] && DC=1\n+        if [ \"$TG$DC\" = \"00\" ]; then echo \"notifications not configured; skipping\"; exit 0; fi\n+        apk add --no-cache curl >/dev/null\n+        case \"$CI_PIPELINE_STATUS\" in success) ICON=\"OK\";; *) ICON=\"FAILED\";; esac\n+        NL=$(printf '\\n_'); NL=${NL%_}\n+        SUBJECT=$(printf '%s' \"$CI_COMMIT_MESSAGE\" | head -n 1)\n+        TEXT=\"$ICON $CI_REPO | ${CI_WORKFLOW_NAME:-pipeline} | $CI_PIPELINE_STATUS${NL}branch ${CI_COMMIT_BRANCH:-$CI_COMMIT_REF} @ $(printf '%.7s' \"$CI_COMMIT_SHA\") by $CI_COMMIT_AUTHOR${NL}$SUBJECT${NL}$CI_PIPELINE_URL\"\n+        if [ \"$TG\" = 1 ]; then\n+          curl -sS -m 20 -o /dev/null \"${TELEGRAM_API_URL:-https://api.telegram.org}/bot${TELEGRAM_BOT_TOKEN}/sendMessage\"             --data-urlencode \"chat_id=${TELEGRAM_CHAT_ID}\" --data-urlencode \"text=${TEXT}\" -d disable_web_page_preview=true             && echo \"telegram: sent\" || echo \"telegram: FAILED (ignored)\"\n+        fi\n+        if [ \"$DC\" = 1 ]; then\n+          curl -sS -m 20 -o /dev/null \"${DISCORD_WEBHOOK_URL}\" --form-string \"content=${TEXT}\"             && echo \"discord: sent\" || echo \"discord: FAILED (ignored)\"\n+        fi\n"
+  },
+  {
+    "id": "rev-878714c0",
+    "createdAt": "2026-10-19T17:57:16.157Z",
+    "source": "cli",
+    "repository": "LLMs4EU/lds-fc-ui-complete-fork",
+    "prTitle": "Local Review: Latest commit (HEAD) (mihastele/sprint/20261018-20261025)",
+    "author": "Miha",
+    "baseBranch": "main",
+    "headBranch": "mihastele/sprint/20261018-20261025",
+    "commitSha": "83abfb3769a15cd53c3477307e9c1fae0d65a66d",
+    "providerUsed": "heuristic",
+    "modelUsed": "openrabbit-ast-v1",
+    "durationMs": 12,
+    "stats": {
+      "filesReviewed": 1,
+      "additions": 35,
+      "deletions": 0,
+      "findingsCount": 1,
+      "criticalCount": 0,
+      "warningCount": 0,
+      "suggestionCount": 0,
+      "nitpickCount": 0,
+      "praiseCount": 1
+    },
+    "walkthrough": {
+      "title": "Local Review: Latest commit (HEAD) (mihastele/sprint/20261018-20261025)",
+      "executiveSummary": "This pull request modifies **1 file** across **.woodpecker** (+35/-0 lines). The changes are clean and well-scoped with no blocking defects found.",
+      "releaseNotes": [
+        {
+          "category": "Enhancements & Refactoring",
+          "items": [
+            ".woodpecker: Updates `FAILED` in .woodpecker (+35/-0)."
+          ]
+        }
+      ],
+      "fileSummaries": [
+        {
+          "path": ".woodpecker/test.yaml",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 0,
+          "component": ".woodpecker",
+          "summary": "Updates `FAILED` in .woodpecker (+35/-0).",
+          "impact": "medium"
+        }
+      ],
+      "mermaidDiagram": "sequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_test_yaml as test.yaml\n  Caller->>+M0_test_yaml: Invoke FAILED()\n  M0_test_yaml-->>-Caller: Return result",
+      "poem": "Across `test.yaml` the fresh patches gleam,\nAs crisp as a carrot beside a clear stream.\nNo tangles or snares in the logic we find—\nHop onward to merge with a confident mind! 🐇🥕",
+      "effortScore": 2,
+      "estimatedMinutes": 4,
+      "riskLevel": "low",
+      "securityConcerns": []
+    },
+    "findings": [
+      {
+        "id": "finding-f6fa6c1e",
+        "file": ".woodpecker/test.yaml",
+        "startLine": 28,
+        "endLine": 28,
+        "severity": "praise",
+        "category": "architecture",
+        "title": "Clean, well-structured implementation with no high-risk anti-patterns",
+        "body": "Reviewed **+35/-0** lines in `.woodpecker/test.yaml` affecting `FAILED`. No security vulnerabilities, unhandled errors, or unsafe resource leaks were detected."
+      }
+    ],
+    "markdownWalkthrough": "<!-- openrabbit-walkthrough -->\n## 🐇 OpenRabbit PR Walkthrough\n\nThis pull request modifies **1 file** across **.woodpecker** (+35/-0 lines). The changes are clean and well-scoped with no blocking defects found.\n\n### 📋 Summary by OpenRabbit\n- **Enhancements & Refactoring**\n  - .woodpecker: Updates `FAILED` in .woodpecker (+35/-0).\n\n| Metric | Value |\n| :--- | :--- |\n| **Review Effort** | 🟦🟦⬜⬜⬜ (2/5) (~4 min) |\n| **Risk Assessment** | **LOW** (No blocking issues) |\n| **Actionable Comments** | **0** inline findings |\n| **Engine** | `heuristic/openrabbit-ast-v1` (0.01s) |\n\n<details open>\n<summary><strong>🧭 Detailed File Walkthrough (1 files)</strong></summary>\n\n| File | Component | Changes | Impact | Summary |\n| :--- | :--- | :---: | :---: | :--- |\n| `.woodpecker/test.yaml` | .woodpecker | `+35/-0` | 🟡 Med | Updates `FAILED` in .woodpecker (+35/-0). |\n\n</details>\n\n<details open>\n<summary><strong>🔄 Sequence Diagram</strong></summary>\n\n```mermaid\nsequenceDiagram\n  autonumber\n  actor Caller as Caller / Client\n  participant M0_test_yaml as test.yaml\n  Caller->>+M0_test_yaml: Invoke FAILED()\n  M0_test_yaml-->>-Caller: Return result\n```\n\n</details>\n\n### 🥕 Poem\n> Across `test.yaml` the fresh patches gleam,\n> As crisp as a carrot beside a clear stream.\n> No tangles or snares in the logic we find—\n> Hop onward to merge with a confident mind! 🐇🥕\n\n---\n<sub>💬 **Tip:** Mention `@openrabbit explain`, `@openrabbit test`, `@openrabbit fix`, or ask any question in a review comment! Configured via `.openrabbit.yaml`.</sub>",
+    "rawDiff": "diff --git a/.woodpecker/test.yaml b/.woodpecker/test.yaml\nindex 19fb999..ff9cf6f 100644\n--- a/.woodpecker/test.yaml\n+++ b/.woodpecker/test.yaml\n@@ -25,3 +25,38 @@ steps:\n       CI: \"false\"\n     commands:\n       - npm run build\n+\n+  # Optional chat notification. Does nothing unless a Telegram bot\n+  # (telegram_bot_token + telegram_chat_id) and/or a Discord webhook\n+  # (discord_webhook_url) is configured as a Woodpecker secret. It can never\n+  # fail the pipeline.\n+  - name: notify\n+    image: docker.io/alpine:3.20\n+    failure: ignore\n+    when:\n+      - status: [success, failure]\n+    environment:\n+      TELEGRAM_BOT_TOKEN:\n+        from_secret: telegram_bot_token\n+      TELEGRAM_CHAT_ID:\n+        from_secret: telegram_chat_id\n+      DISCORD_WEBHOOK_URL:\n+        from_secret: discord_webhook_url\n+    commands:\n+      - |\n+        set -u\n+        TG=0; DC=0\n+        [ -n \"${TELEGRAM_BOT_TOKEN:-}\" ] && [ -n \"${TELEGRAM_CHAT_ID:-}\" ] && TG=1\n+        [ -n \"${DISCORD_WEBHOOK_URL:-}\" ] && DC=1\n+        if [ \"$TG$DC\" = \"00\" ]; then echo \"notifications not configured; skipping\"; exit 0; fi\n+        apk add --no-cache curl >/dev/null\n+        case \"$CI_PIPELINE_STATUS\" in success) ICON=\"OK\";; *) ICON=\"FAILED\";; esac\n+        NL=$(printf '\\n_'); NL=${NL%_}\n+        SUBJECT=$(printf '%s' \"$CI_COMMIT_MESSAGE\" | head -n 1)\n+        TEXT=\"$ICON $CI_REPO | ${CI_WORKFLOW_NAME:-pipeline} | $CI_PIPELINE_STATUS${NL}branch ${CI_COMMIT_BRANCH:-$CI_COMMIT_REF} @ $(printf '%.7s' \"$CI_COMMIT_SHA\") by $CI_COMMIT_AUTHOR${NL}$SUBJECT${NL}$CI_PIPELINE_URL\"\n+        if [ \"$TG\" = 1 ]; then\n+          curl -sS -m 20 -o /dev/null \"${TELEGRAM_API_URL:-https://api.telegram.org}/bot${TELEGRAM_BOT_TOKEN}/sendMessage\"             --data-urlencode \"chat_id=${TELEGRAM_CHAT_ID}\" --data-urlencode \"text=${TEXT}\" -d disable_web_page_preview=true             && echo \"telegram: sent\" || echo \"telegram: FAILED (ignored)\"\n+        fi\n+        if [ \"$DC\" = 1 ]; then\n+          curl -sS -m 20 -o /dev/null \"${DISCORD_WEBHOOK_URL}\" --form-string \"content=${TEXT}\"             && echo \"discord: sent\" || echo \"discord: FAILED (ignored)\"\n+        fi\n"
+  },
+  {
     "id": "rev-38194d33",
     "createdAt": "2026-10-18T16:11:47.377Z",
     "source": "cli",

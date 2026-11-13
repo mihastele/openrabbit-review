@@ -29,6 +29,27 @@ const SEVERITY_RANKS: Record<ReviewSeverity, number> = {
  */
 export const GLOBAL_SECURITY_RULES: LanguageRule[] = [
   {
+    id: 'sec-tls-verification-disabled',
+    title: 'TLS certificate verification disabled',
+    severity: 'critical', category: 'security',
+    matchLine: (line) => /\b(?:rejectUnauthorized|verify_ssl|ssl_verify)\s*[:=]\s*(?:false|False)\b/.test(line) || /\brequests\.(?:get|post|put|delete|patch|request)\s*\([^\n]*\bverify\s*=\s*False\b/.test(line) || /\bNODE_TLS_REJECT_UNAUTHORIZED\s*[:=]\s*['"]0['"]/.test(line),
+    buildFinding: () => ({ body: 'Disabling certificate verification can allow an attacker to impersonate a remote service (CWE-295). Enable verification and configure a trusted CA if needed; confirm this setting applies to a network connection.' }),
+  },
+  {
+    id: 'sec-jwt-signature-disabled',
+    title: 'JWT signature verification disabled',
+    severity: 'critical', category: 'security',
+    matchLine: (line) => /['"]?verify_signature['"]?\s*[:=]\s*(?:false|False)\b/.test(line) || /\balgorithms\s*[:=]\s*\[\s*['"]none['"]\s*\]/i.test(line),
+    buildFinding: () => ({ body: 'Accepting tokens without signature verification may allow forged credentials (CWE-347). Verify the signature using trusted keys and an explicit allowlist of algorithms.' }),
+  },
+  {
+    id: 'sec-weak-crypto-hash',
+    title: 'Weak hash used for password storage',
+    severity: 'warning', category: 'security',
+    matchLine: (line) => /(?:md5|sha1)\s*\([^\n]*(?:password|passwd|pwd)/i.test(line) || /(?:password|passwd|pwd)[^\n]*\b(?:md5|sha1)\s*\(/i.test(line),
+    buildFinding: () => ({ body: 'Fast hashes such as MD5 and SHA-1 are unsuitable for password storage (CWE-916). Use a password hashing function such as Argon2id, scrypt, or bcrypt with unique salts. Verify the value is a password before changing the code.' }),
+  },
+  {
     id: 'sec-hardcoded-secret',
     title: 'Hardcoded secret or API credential detected',
     severity: 'critical',

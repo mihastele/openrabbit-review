@@ -21,11 +21,13 @@ import {
   resolveActiveProvider,
 } from './llm-provider.js';
 import { formatWalkthroughMarkdown } from './markdown-formatter.js';
+import { runSecurityScanners } from './security-scanners/index.js';
 
 export interface RunReviewOptions {
   rawDiff: string;
   prTitle?: string;
   repository?: string;
+  repoPath?: string;
   prNumber?: number;
   author?: string;
   baseBranch?: string;
@@ -34,13 +36,14 @@ export interface RunReviewOptions {
   source?: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'playground';
   config?: OpenRabbitConfig;
   reviewer?: 'hybrid' | 'custom' | 'static-only' | 'llm-only';
+  securityScanScope?: { skippedFiles: number };
 }
 
 export async function runPullRequestReview(
   options: RunReviewOptions
 ): Promise<ReviewResult> {
   const startTime = Date.now();
-  const config = options.config || DEFAULT_OPENRABBIT_CONFIG;
+  const config = structuredClone(options.config || DEFAULT_OPENRABBIT_CONFIG);
   if (options.reviewer) {
     config.reviewer = options.reviewer;
   }
@@ -65,10 +68,49 @@ export async function runPullRequestReview(
     reviewerMode !== 'llm-only' &&
     (config.static_analysis ? config.static_analysis.enabled !== false : true);
 
+  if (filteredFiles.length > 0 && !shouldRunStatic &&
+      (reviewerMode === 'static-only' || activeProviderInfo.provider === 'heuristic')) {
+    throw new Error('No review engine is available: enable static analysis or configure an LLM provider.');
+  }
+
   // Run deterministic static rules (built-in subset + Schema v1 custom rules)
   let findings: InlineFinding[] = shouldRunStatic
     ? runHeuristicInlineReview(filteredFiles, config)
     : [];
+
+  let scannerTelemetry: { scannersRun: string[]; scannersSkipped: string[] } | undefined;
+  if (
+    options.repoPath &&
+    reviewerMode !== 'llm-only' &&
+    config.security_scanners?.enabled !== false &&
+    filteredFiles.length > 0
+  ) {
+    const scanResult = await runSecurityScanners({
+      repoPath: options.repoPath,
+      files: filteredFiles,
+      config,
+    });
+    scannerTelemetry = {
+      scannersRun: scanResult.scannersRun,
+      scannersSkipped: scanResult.scannersSkipped,
+    };
+    if (scanResult.findings.length > 0) {
+      const existing = new Set(
+        findings.map((f) => `${f.file}:${f.startLine}:${f.ruleMatched || f.title}`)
+      );
+      for (const sf of scanResult.findings) {
+        const key = `${sf.file}:${sf.startLine}:${sf.ruleMatched || sf.title}`;
+        if (!existing.has(key)) {
+          existing.add(key);
+          findings.push(sf);
+        }
+      }
+    }
+  }
+
+  if (config.profile === 'security-focused') {
+    findings = findings.filter((finding) => finding.category === 'security');
+  }
 
   let walkthrough: PRWalkthrough = buildHeuristicWalkthrough(
     prTitle,
@@ -80,11 +122,11 @@ export async function runPullRequestReview(
   let providerUsed: string =
     reviewerMode === 'custom'
       ? 'custom-static'
-      : activeProviderInfo.provider;
+      : reviewerMode === 'static-only' ? 'heuristic' : activeProviderInfo.provider;
   let modelUsed: string =
     reviewerMode === 'custom'
       ? 'openrabbit-rules-v1'
-      : activeProviderInfo.model;
+      : reviewerMode === 'static-only' ? 'openrabbit-ast-v1' : activeProviderInfo.model;
 
   const shouldRunLLM =
     reviewerMode !== 'static-only' &&
@@ -100,10 +142,13 @@ export async function runPullRequestReview(
         activeProviderInfo.provider,
         activeProviderInfo.model
       );
-      if (llmOutput.findings.length > 0) {
+      const llmFindings = config.profile === 'security-focused'
+        ? llmOutput.findings.filter((finding) => finding.category === 'security' && finding.severity !== 'praise')
+        : llmOutput.findings;
+      if (llmFindings.length > 0) {
         findings = mergeAndSnapFindings(
           findings,
-          llmOutput.findings,
+          llmFindings,
           filteredFiles,
           config
         );
@@ -130,6 +175,9 @@ export async function runPullRequestReview(
         modelUsed = llmOutput.model;
       }
     } catch (err) {
+      if (!shouldRunStatic) {
+        throw new Error(`LLM review failed and static analysis is disabled: ${(err as Error).message}`, { cause: err });
+      }
       console.warn(
         `[OpenRabbit] External LLM provider (${activeProviderInfo.provider}) unavailable, falling back to built-in AST/Heuristic engine:`,
         (err as Error).message
@@ -140,6 +188,15 @@ export async function runPullRequestReview(
           ? 'openrabbit-rules-v1'
           : 'openrabbit-ast-v1 (fallback)';
     }
+  }
+
+  if (config.profile === 'security-focused') {
+    walkthrough = {
+      ...buildHeuristicWalkthrough(prTitle, filteredFiles, findings, config),
+      executiveSummary: options.securityScanScope
+        ? `Offline security scan of ${filteredFiles.length} tracked working-tree text file(s) found ${findings.length} potential security issue(s); ${options.securityScanScope.skippedFiles} tracked file(s) were skipped. Findings require human verification; this scan does not establish that the repository is secure.`
+        : `Security review of ${filteredFiles.length} changed file(s) found ${findings.length} potential security issue(s). Findings require human verification; this diff-based review does not establish that the repository is secure.`,
+    };
   }
 
   const durationMs = Math.max(12, Date.now() - startTime);
@@ -190,6 +247,7 @@ export async function runPullRequestReview(
     findings,
     markdownWalkthrough,
     rawDiff: options.rawDiff,
+    ...(scannerTelemetry ? { scannerTelemetry } : {}),
   };
 }
 
@@ -222,6 +280,7 @@ async function runLLMTwoStageReview(
 Profile mode: ${config.profile.toUpperCase()}
 Tone instructions: ${config.tone_instructions}
 Human Review Language: ${config.language}
+${config.profile === 'security-focused' ? `Security review: report only security findings. Examine authorization, trust boundaries, injection, secrets, insecure cryptography, and sensitive data exposure. Cite evidence in the diff, explain prerequisites and uncertainty, and give practical remediation. Do not claim exploitability or repository-wide safety without evidence.` : ''}
 
 Apply deep, language-idiomatic standards across all languages present in the diff:
 - Python: check mutable default arguments (def f(x=[])), SQL injection via f-strings/raw formatting, subprocess shell=True, unclosed files/context managers, unhandled exceptions, and blocking async calls.
