@@ -4,3 +4,13 @@ dist/
 *.log
 .DS_Store
 coverage/
+.hermes/
+data/*.json
+data/jobs.json
+data/pr-states.json
+data/memory/
+data/cache/
+!data/.gitkeep
+.playwright-data/
+test-results/
+playwright-report/

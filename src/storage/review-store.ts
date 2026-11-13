@@ -562,6 +562,11 @@ export class ReviewStore {
       }
     }
 
+    // Production starts empty. Demo templates are explicit and never seeded.
+    if (process.env.NODE_ENV === 'production') {
+      return;
+    }
+
     // Seed with initial sample reviews so the dashboard is immediately rich
     const seeded: ReviewResult[] = [];
     const heuristicConfig = structuredClone(DEFAULT_OPENRABBIT_CONFIG);

@@ -4,14 +4,28 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OpenRabbit — Open-Source AI Pull Request Reviewer & Walkthrough Platform</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="/vendor/mermaid.min.js"></script>
 </head>
 <body>
-  <div class="app-shell">
+  <div id="loginScreen" class="login-screen">
+    <form id="loginForm" class="card login-card">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">🐇</div>
+        <div>
+          <h1 class="brand-name">OpenRabbit</h1>
+          <p class="card-subtitle">Sign in to your self-hosted review server</p>
+        </div>
+      </div>
+      <label class="field-label" for="loginToken">Admin token</label>
+      <input id="loginToken" class="input" type="password" autocomplete="current-password" required />
+      <p class="mono-hint">Find <code>OPENRABBIT_ADMIN_TOKEN</code> in the server's private <code>.env</code> file.</p>
+      <button class="btn btn-primary btn-block btn-lg" id="btnLogin" type="submit">Sign in</button>
+      <div id="loginStatus" class="save-toast hidden" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+
+  <div class="app-shell hidden" id="appShell">
     <!-- Top Navigation Header -->
     <header class="topbar">
       <div class="brand">
@@ -25,21 +39,18 @@
         </div>
       </div>
 
-      <nav class="nav-tabs" role="tablist">
-        <button class="nav-tab active" data-tab="studio" role="tab">
-          <span>🔎</span> PR Review Studio
+      <nav class="nav-tabs" role="tablist" aria-label="Main navigation">
+        <button class="nav-tab active" data-tab="home" role="tab" aria-selected="true">
+          <span>🏠</span> Home
         </button>
-        <button class="nav-tab" data-tab="repos" role="tab">
-          <span>📁</span> Local Repos &amp; Commits
+        <button class="nav-tab" data-tab="studio" role="tab" aria-selected="false">
+          <span>🔎</span> Review
         </button>
-        <button class="nav-tab" data-tab="history" role="tab">
-          <span>📊</span> Reviews &amp; Analytics
+        <button class="nav-tab" data-tab="history" role="tab" aria-selected="false">
+          <span>📊</span> Activity
         </button>
-        <button class="nav-tab" data-tab="rules" role="tab">
-          <span>🛠️</span> Custom Reviewer &amp; Rules
-        </button>
-        <button class="nav-tab" data-tab="webhooks" role="tab">
-          <span>🔌</span> Webhooks &amp; Integrations
+        <button class="nav-tab" data-tab="settings" role="tab" aria-selected="false">
+          <span>⚙️</span> Settings
         </button>
       </nav>
 
@@ -48,16 +59,107 @@
           <span class="status-dot"></span>
           <span id="activeEngineText">Loading engine...</span>
         </div>
+        <button class="btn btn-secondary btn-sm" id="btnLogout" type="button">Sign out</button>
       </div>
     </header>
 
     <!-- ================================================================== -->
+    <!-- HOME: SIMPLE ONBOARDING AND RECENT ACTIVITY                        -->
+    <!-- ================================================================== -->
+    <main id="tab-home" class="tab-panel active">
+      <section class="home-hero card">
+        <div>
+          <p class="eyebrow">Self-hosted code review</p>
+          <h1>Review pull requests without sending your code to a review SaaS.</h1>
+          <p class="card-subtitle">OpenRabbit runs on your server, works with no API key using built-in static analysis, and can connect to GitHub, Codeberg, GitLab, or Bitbucket.</p>
+        </div>
+        <div class="home-actions">
+          <button class="btn btn-primary btn-lg" id="btnTryDemo" type="button">Try a demo review</button>
+          <button class="btn btn-secondary btn-lg" id="btnConnectProvider" type="button">Connect a Git provider</button>
+        </div>
+      </section>
+
+      <div class="setup-grid">
+        <article class="card setup-card">
+          <div class="setup-card-top"><span class="status-dot"></span><span class="mono-tag">Server</span></div>
+          <h2 id="homeServerStatus">Checking…</h2>
+          <p class="card-subtitle">Health endpoint and dashboard session.</p>
+        </article>
+        <article class="card setup-card">
+          <div class="setup-card-top"><span class="status-dot"></span><span class="mono-tag">AI engine</span></div>
+          <h2 id="homeAiStatus">Checking…</h2>
+          <p class="card-subtitle">Heuristic always works; LLM keys are optional.</p>
+        </article>
+        <article class="card setup-card">
+          <div class="setup-card-top"><span class="status-dot"></span><span class="mono-tag">Git providers</span></div>
+          <h2 id="homeIntegrationsStatus">Checking…</h2>
+          <p class="card-subtitle">Tokens stay on this server.</p>
+        </article>
+      </div>
+
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Recent reviews</h2>
+            <p class="card-subtitle">Your latest walkthroughs and security scans.</p>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btnHomeOpenActivity" type="button">View activity</button>
+        </div>
+        <div id="homeRecentReviews" class="home-recent-list">
+          <div class="empty-state">No reviews yet. Try the demo or connect a provider.</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ================================================================== -->
+    <!-- SETTINGS: PROGRESSIVE DISCLOSURE FOR ADVANCED FEATURES              -->
+    <!-- ================================================================== -->
+    <main id="tab-settings" class="tab-panel">
+      <div class="card settings-intro">
+        <h1>Settings</h1>
+        <p class="card-subtitle">Start with Connections. Everything else is optional.</p>
+      </div>
+      <div class="settings-grid">
+        <button class="settings-card" type="button" data-settings-target="webhooks">
+          <span class="settings-icon">🔌</span>
+          <strong>Connections</strong>
+          <span>GitHub, Codeberg, GitLab, Bitbucket, webhooks, and CI examples.</span>
+        </button>
+        <button class="settings-card" type="button" data-settings-target="repos">
+          <span class="settings-icon">📁</span>
+          <strong>Local repositories</strong>
+          <span>Review commits or scan a repository on the Pi.</span>
+        </button>
+        <button class="settings-card" type="button" data-settings-target="rules">
+          <span class="settings-icon">🛠️</span>
+          <strong>Review behavior and rules</strong>
+          <span>Profiles, custom rules, built-in rule catalogs, and YAML.</span>
+        </button>
+      </div>
+      <section class="card settings-security">
+        <h2>Server security</h2>
+        <p class="card-subtitle">Keep <code>.env</code> private. Public deployments must use HTTPS and strong webhook secrets. Dashboard access is protected by your admin token.</p>
+      </section>
+    </main>
+
+    <!-- ================================================================== -->
     <!-- TAB 1: LIVE PR REVIEW STUDIO & WALKTHROUGH VIEWER                  -->
     <!-- ================================================================== -->
-    <main id="tab-studio" class="tab-panel active">
+    <main id="tab-studio" class="tab-panel">
       <div class="studio-grid">
         <!-- Left Sidebar: Diff Input & Controls -->
         <aside class="studio-sidebar card">
+          <div class="quick-remote-review">
+            <label class="field-label" for="inputQuickPrUrl">Review a pull request</label>
+            <input id="inputQuickPrUrl" class="input" type="url" placeholder="https://github.com/owner/repo/pull/123" />
+            <div class="quick-remote-actions">
+              <button class="btn btn-primary" id="btnQuickRemoteReview" type="button">Review pull request</button>
+              <span id="quickRemoteStatus" class="mono-hint" role="status" aria-live="polite"></span>
+            </div>
+            <p class="mono-hint">Works with GitHub, Codeberg, GitLab, and Bitbucket. Tokens are configured on the server.</p>
+          </div>
+          <details class="advanced">
+            <summary>Advanced: paste a diff or choose a local commit</summary>
           <div class="card-header">
             <h2>1. Pull Request Diff Source</h2>
             <button class="btn btn-secondary btn-xs" id="btnReviewLocalGit" title="Run git diff on local workspace">
@@ -158,6 +260,7 @@
             <span>🐇</span> Run OpenRabbit PR Review
           </button>
           <div id="studioReviewStatus" class="save-toast hidden" role="status" aria-live="polite"></div>
+          </details>
         </aside>
 
         <!-- Right Main Area: PR Walkthrough + Line-by-Line Inline Review -->
@@ -169,6 +272,7 @@
                 <span class="pr-state-pill">🟢 Open PR</span>
                 <span class="mono-tag" id="viewRepoTag">acme-corp/identity-service #142</span>
                 <span class="mono-tag" id="viewEngineTag">heuristic/openrabbit-ast-v1</span>
+                <span class="mono-hint" id="viewScannerTelemetry"></span>
               </div>
               <h1 id="viewPrTitle" class="pr-main-title">Loading PR Review...</h1>
             </div>
@@ -338,6 +442,10 @@
     <!-- TAB 2: LOCAL REPOSITORIES & COMMITS EXPLORER                         -->
     <!-- ================================================================== -->
     <main id="tab-repos" class="tab-panel">
+      <div class="subpage-header">
+        <button class="btn btn-secondary btn-sm" type="button" data-settings-target="settings">← Back to Settings</button>
+        <h1>Local repositories</h1>
+      </div>
       <div class="repos-layout">
         <!-- Add Repository Card -->
         <div class="card">
@@ -491,6 +599,35 @@
     <!-- TAB 3: REVIEW HISTORY & TEAM ANALYTICS                             -->
     <!-- ================================================================== -->
     <main id="tab-history" class="tab-panel">
+      <div class="subpage-header">
+        <h1>Activity</h1>
+      </div>
+      <section class="card jobs-card">
+        <div class="card-header">
+          <div>
+            <h2>Background review jobs</h2>
+            <p class="card-subtitle">Webhook reviews run in the background so providers receive a fast response.</p>
+          </div>
+          <span id="jobsRefreshStatus" class="mono-hint" role="status" aria-live="polite"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="walkthrough-table jobs-table">
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>PR / Repository</th>
+                <th>Status</th>
+                <th>Attempts</th>
+                <th>Updated</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody id="jobsTableBody">
+              <tr><td colspan="6"><div class="empty-state">No background jobs yet.</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
       <div class="analytics-kpi-grid" id="analyticsKpiGrid"></div>
 
       <div class="history-layout">
@@ -531,6 +668,10 @@
     <!-- TAB 4: CUSTOM REVIEWER & STATIC RULES STUDIO (SCHEMA V1)           -->
     <!-- ================================================================== -->
     <main id="tab-rules" class="tab-panel">
+      <div class="subpage-header">
+        <button class="btn btn-secondary btn-sm" type="button" data-settings-target="settings">← Back to Settings</button>
+        <h1>Review behavior and rules</h1>
+      </div>
       <!-- Top Overview Header -->
       <div class="card" style="margin-bottom: 20px;">
         <div class="card-header" style="flex-wrap: wrap; gap: 12px;">
@@ -910,6 +1051,32 @@
     <!-- TAB 5: WEBHOOK SIMULATOR & CI/CD INTEGRATIONS                      -->
     <!-- ================================================================== -->
     <main id="tab-webhooks" class="tab-panel">
+      <div class="subpage-header">
+        <button class="btn btn-secondary btn-sm" type="button" data-settings-target="settings">← Back to Settings</button>
+        <h1>Connections</h1>
+      </div>
+      <section class="card connection-guide">
+        <div class="card-header">
+          <div>
+            <h2>Automatic webhook reviews</h2>
+            <p class="card-subtitle">Add the webhook URL and secret in your Git provider. OpenRabbit reviews new PRs and commits in the background.</p>
+          </div>
+          <span id="connectionConfiguredBadge" class="mono-tag">Checking…</span>
+        </div>
+        <label class="field-label" for="selectConnectionPlatform">Provider</label>
+        <select id="selectConnectionPlatform" class="input">
+          <option value="github">GitHub</option>
+          <option value="forgejo">Codeberg / Forgejo</option>
+          <option value="gitlab">GitLab</option>
+          <option value="bitbucket">Bitbucket</option>
+        </select>
+        <div class="connection-url-row">
+          <code id="connectionWebhookUrl">Sign in to reveal the webhook URL</code>
+          <button class="btn btn-secondary btn-sm" id="btnCopyWebhookUrl" type="button">Copy</button>
+        </div>
+        <div id="connectionGuide" class="connection-guide-steps"></div>
+        <p class="mono-hint">Required secret variables are listed in Settings documentation. Browsers never save provider tokens.</p>
+      </section>
       <!-- On-Demand Remote PR / Commit Review Card -->
       <div class="card" style="margin-bottom: 24px;">
         <div class="card-header">
@@ -924,6 +1091,7 @@
             <label class="field-label" for="selectIntegrationPlatform">Platform</label>
             <select id="selectIntegrationPlatform" class="input">
               <option value="github">GitHub</option>
+              <option value="forgejo">Codeberg / Forgejo</option>
               <option value="gitlab">GitLab</option>
               <option value="bitbucket">Bitbucket</option>
             </select>

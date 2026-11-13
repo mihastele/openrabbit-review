@@ -56,7 +56,7 @@ export class ReviewJobQueue<TPayload = unknown, TResult = unknown> {
     payload: TPayload
   ): { job: ReviewJob<TPayload, TResult>; deduplicated: boolean } {
     const existing = this.jobs.find(
-      (j) => j.key === key && (j.status === 'queued' || j.status === 'running')
+      (j) => j.key === key && j.status !== 'failed'
     );
     if (existing) {
       return { job: existing, deduplicated: true };

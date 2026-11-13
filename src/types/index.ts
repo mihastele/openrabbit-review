@@ -169,7 +169,7 @@ export interface PRWalkthrough {
 export interface ReviewResult {
   id: string;
   createdAt: string;
-  source: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'playground';
+  source: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'forgejo' | 'playground';
   repository: string;
   prNumber?: number;
   prTitle: string;

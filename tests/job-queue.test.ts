@@ -47,6 +47,41 @@ describe('Async Job Queue & Incremental PR Re-Reviews Suite', () => {
     }
   });
 
+  it('deduplicates a completed delivery with the same key', async () => {
+    let runs = 0;
+    const queue = new ReviewJobQueue<Record<string, never>, string>({
+      concurrency: 1,
+      processor: async () => {
+        runs += 1;
+        return 'done';
+      },
+    });
+
+    const first = queue.enqueue('github:delivery-1', {});
+    await queue.waitForIdle();
+    const duplicate = queue.enqueue('github:delivery-1', {});
+
+    assert.equal(runs, 1);
+    assert.equal(duplicate.deduplicated, true);
+    assert.equal(duplicate.job.id, first.job.id);
+    assert.equal(duplicate.job.status, 'completed');
+  });
+
+  it('allows a different delivery key to run independently', async () => {
+    let runs = 0;
+    const queue = new ReviewJobQueue<Record<string, never>, number>({
+      concurrency: 1,
+      processor: async () => ++runs,
+    });
+
+    queue.enqueue('github:delivery-a', {});
+    queue.enqueue('github:delivery-b', {});
+    await queue.waitForIdle();
+
+    assert.equal(runs, 2);
+    assert.equal(queue.listJobs().length, 2);
+  });
+
   it('tracks PR review state and resolves incremental commit-range diffs', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openrabbit-inc-'));
     const repoDir = path.join(tmpDir, 'repo');

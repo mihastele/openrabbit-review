@@ -16,6 +16,55 @@
   let selectedFsFolder = null;
   let fsCallback = null;
   let gateRequest = 0;
+  let appStarted = false;
+  let jobsTimer = null;
+  let serverStatus = null;
+  let publicUrl = '';
+  const nativeFetch = window['fetch'].bind(window);
+
+  async function apiFetch(input, init = {}) {
+    const response = await nativeFetch(input, {
+      credentials: 'same-origin',
+      ...init,
+    });
+    if (response.status === 401) {
+      showLoginScreen();
+      throw new Error('Sign in required');
+    }
+    return response;
+  }
+
+  function showLoginScreen() {
+    if (jobsTimer) {
+      clearInterval(jobsTimer);
+      jobsTimer = null;
+    }
+    document.getElementById('appShell').classList.add('hidden');
+    document.getElementById('loginScreen').classList.remove('hidden');
+    const tokenInput = document.getElementById('loginToken');
+    tokenInput.value = '';
+    tokenInput.focus();
+  }
+
+  function showAppShell() {
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('appShell').classList.remove('hidden');
+  }
+
+  async function loginWithToken(token) {
+    const response = await nativeFetch('/api/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+      credentials: 'same-origin',
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Sign in failed.');
+    }
+    showAppShell();
+    await initApp();
+  }
 
   async function updateReviewGate() {
     const request = ++gateRequest;
@@ -28,7 +77,7 @@
     status.textContent = 'Checking…';
     const threshold = document.getElementById('selectFailureThreshold').value;
     try {
-      const response = await fetch(`/api/reviews/${encodeURIComponent(currentReview.id)}/gate?threshold=${encodeURIComponent(threshold)}`);
+      const response = await apiFetch(`/api/reviews/${encodeURIComponent(currentReview.id)}/gate?threshold=${encodeURIComponent(threshold)}`);
       const data = await response.json();
       if (request !== gateRequest) return;
       if (!response.ok) throw new Error(data.error || 'Could not check review status.');
@@ -51,7 +100,7 @@
     button.disabled = true;
     status.textContent = 'Preparing download…';
     try {
-      const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/export?format=${format}`);
+      const response = await apiFetch(`/api/reviews/${encodeURIComponent(reviewId)}/export?format=${format}`);
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.error || 'Download failed.');
@@ -77,7 +126,7 @@
     mermaid.initialize({
       startOnLoad: false,
       theme: 'dark',
-      securityLevel: 'loose',
+      securityLevel: 'strict',
     });
   }
 
@@ -95,69 +144,193 @@
       .replace(/`([^`]+)`/g, '<code>$1</code>');
   }
 
-  function switchToTab(target) {
-    const btn = document.querySelector(`.nav-tab[data-tab="${target}"]`);
-    if (btn) btn.click();
+  function activateTopTab(target) {
+    document.querySelectorAll('.nav-tab').forEach((tab) => {
+      const active = tab.getAttribute('data-tab') === target;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
+    document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.remove('active'));
+    document.getElementById(`tab-${target}`)?.classList.add('active');
+    if (jobsTimer) {
+      clearInterval(jobsTimer);
+      jobsTimer = null;
+    }
+    if (target === 'history') {
+      loadHistoryAndAnalytics();
+      loadJobs();
+      jobsTimer = setInterval(loadJobs, 5000);
+    } else if (target === 'home') {
+      refreshHomeStatus();
+    }
   }
 
-  // Tab Navigation
-  document.querySelectorAll('.nav-tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const target = btn.getAttribute('data-tab');
-      document.querySelectorAll('.nav-tab').forEach((b) => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
-      btn.classList.add('active');
-      const panel = document.getElementById(`tab-${target}`);
-      if (panel) panel.classList.add('active');
-      if (target === 'history') {
-        loadHistoryAndAnalytics();
-      } else if (target === 'repos') {
-        loadRepositories();
-      } else if (target === 'rules') {
-        loadRulesStudio();
-      }
+  function openSettingsSection(target) {
+    const destination = target === 'settings' ? 'settings' : target;
+    document.querySelectorAll('.nav-tab').forEach((tab) => {
+      const active = tab.getAttribute('data-tab') === 'settings';
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
+    document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.remove('active'));
+    document.getElementById(`tab-${destination}`)?.classList.add('active');
+    if (destination === 'repos') loadRepositories();
+    if (destination === 'rules') loadRulesStudio();
+    if (destination === 'webhooks') updateConnectionGuide();
+  }
+
+  function switchToTab(target) {
+    if (target === 'repos' || target === 'rules' || target === 'webhooks') {
+      openSettingsSection(target);
+      return;
+    }
+    activateTopTab(target);
+  }
+
+  document.querySelectorAll('.nav-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      activateTopTab(tab.getAttribute('data-tab'));
+    });
+    tab.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      const tabs = Array.from(document.querySelectorAll('.nav-tab'));
+      const index = tabs.indexOf(tab);
+      const delta = event.key === 'ArrowRight' ? 1 : -1;
+      tabs[(index + delta + tabs.length) % tabs.length].focus();
     });
   });
 
+  document.querySelectorAll('[data-settings-target]').forEach((button) => {
+    button.addEventListener('click', () => {
+      openSettingsSection(button.getAttribute('data-settings-target'));
+      document.getElementById('tab-settings')?.scrollIntoView({ block: 'start' });
+    });
+  });
+
+  function renderHomeRecent(reviews) {
+    const container = document.getElementById('homeRecentReviews');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!reviews.length) {
+      container.innerHTML =
+        '<div class="empty-state">No reviews yet. Try the demo or connect a provider.</div>';
+      return;
+    }
+    for (const review of reviews.slice(0, 5)) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'home-review-row';
+      item.innerHTML = `
+        <span>
+          <strong>${escapeHtml(review.prTitle)}</strong>
+          <small>${escapeHtml(review.repository)} · ${escapeHtml(review.source)}</small>
+        </span>
+        <span class="mono-tag">${review.stats?.findingsCount || 0} findings</span>
+      `;
+      item.addEventListener('click', async () => {
+        activateTopTab('studio');
+        await loadReviewById(review.id);
+      });
+      container.appendChild(item);
+    }
+  }
+
+  function refreshHomeStatus() {
+    if (!serverStatus) return;
+    document.getElementById('homeServerStatus').textContent = 'Healthy';
+    const provider = serverStatus.activeProvider || {};
+    document.getElementById('homeAiStatus').textContent =
+      provider.provider === 'heuristic'
+        ? 'Built-in static analysis'
+        : `${provider.provider || 'Auto'} / ${provider.model || 'default'}`;
+    const webhooks = serverStatus.webhooks || {};
+    const configured = [
+      webhooks.githubConfigured && 'GitHub',
+      webhooks.forgejoConfigured && 'Codeberg',
+      webhooks.gitlabConfigured && 'GitLab',
+      webhooks.bitbucketConfigured && 'Bitbucket',
+    ].filter(Boolean);
+    document.getElementById('homeIntegrationsStatus').textContent = configured.length
+      ? configured.join(' · ')
+      : 'No provider token yet';
+  }
+
+  async function refreshHomeRecent() {
+    try {
+      const response = await apiFetch('/api/reviews');
+      const data = await response.json();
+      renderHomeRecent(data.reviews || []);
+    } catch {
+      // The review remains available in Activity even if the summary refresh fails.
+    }
+  }
+
+  async function loadJobs() {
+    const tbody = document.getElementById('jobsTableBody');
+    if (!tbody) return;
+    try {
+      const response = await apiFetch('/api/jobs?limit=20');
+      const data = await response.json();
+      const jobs = data.jobs || [];
+      document.getElementById('jobsRefreshStatus').textContent = `${jobs.length} recent`;
+      if (!jobs.length) {
+        tbody.innerHTML =
+          '<tr><td colspan="6"><div class="empty-state">No background jobs yet.</div></td></tr>';
+        return;
+      }
+      tbody.innerHTML = '';
+      for (const job of jobs) {
+        const payload = job.payload || {};
+        const provider = payload.provider || 'unknown';
+        const event = payload.payload || {};
+        const repository =
+          event.repository?.full_name || event.project?.path_with_namespace || '—';
+        const pr =
+          event.pull_request?.number || event.issue?.number || event.number ||
+          event.object_attributes?.iid || event.pullrequest?.id || '—';
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${escapeHtml(provider)}</td>
+          <td><strong>#${escapeHtml(String(pr))}</strong><br><span class="mono-hint">${escapeHtml(repository)}</span></td>
+          <td><span class="job-status job-status-${escapeHtml(job.status)}">${escapeHtml(job.status)}</span></td>
+          <td>${job.attempts}/${job.maxAttempts}</td>
+          <td>${escapeHtml(new Date(job.updatedAt).toLocaleString())}</td>
+          <td class="job-error">${escapeHtml(job.error || '')}</td>
+        `;
+        tbody.appendChild(row);
+      }
+    } catch (error) {
+      document.getElementById('jobsRefreshStatus').textContent = error.message;
+    }
+  }
+
   async function initApp() {
+    if (appStarted) return;
+    appStarted = true;
     try {
       const [statusRes, tplRes, revRes] = await Promise.all([
-        fetch('/api/status').then((r) => r.json()),
-        fetch('/api/templates').then((r) => r.json()),
-        fetch('/api/reviews').then((r) => r.json()),
+        apiFetch('/api/status').then((r) => r.json()),
+        apiFetch('/api/templates').then((r) => r.json()),
+        apiFetch('/api/reviews').then((r) => r.json()),
       ]);
 
-      // Engine badge
+      serverStatus = statusRes;
+      publicUrl = (statusRes.publicUrl || '').replace(/\/$/, '');
       const engineEl = document.getElementById('activeEngineText');
       if (statusRes.activeProvider) {
         engineEl.textContent = `Engine: ${statusRes.activeProvider.provider}/${statusRes.activeProvider.model}`;
       }
-
-      // Populate Rules & Providers tab
       renderProvidersStatus(statusRes.providers || []);
       populateConfigForm(statusRes.config, statusRes.yamlConfig);
 
-      // Load Custom Rules Studio
-      await loadRulesStudio();
-
-      // Populate Sample Templates
       templates = tplRes.templates || [];
       renderTemplatePills();
-
-      // Load first template into editor & show initial seeded review
-      if (templates.length > 0) {
-        selectTemplate(templates[0], false);
-      }
-
-      if (revRes.reviews && revRes.reviews.length > 0) {
-        await loadReviewById(revRes.reviews[0].id);
-      } else if (templates.length > 0) {
-        await executeReview();
-      }
-
+      renderHomeRecent(revRes.reviews || []);
       renderAnalyticsAndHistory(revRes.reviews || [], revRes.analytics || {});
-      await loadRepositories();
+      refreshHomeStatus();
+      updateConnectionGuide();
     } catch (err) {
+      appStarted = false;
       console.error('Failed to initialize OpenRabbit UI:', err);
     }
   }
@@ -229,7 +402,7 @@
       const reviewer =
         document.getElementById('selectReviewerMode')?.value || 'hybrid';
 
-      const res = await fetch('/api/review', {
+      const res = await apiFetch('/api/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -248,6 +421,7 @@
       currentReview = data.review;
       currentParsedDiff = data.parsedDiff;
       renderReviewStudio(currentReview, currentParsedDiff);
+      await refreshHomeRecent();
     } catch (err) {
       console.error('Review error:', err);
       showStudioReviewStatus(`Review failed: ${err.message}`, true);
@@ -266,7 +440,7 @@
     showStudioReviewStatus('');
     btn.textContent = '⏳ Reading git diff...';
     try {
-      const res = await fetch('/api/review/local', {
+      const res = await apiFetch('/api/review/local', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -300,7 +474,7 @@
   });
 
   async function loadReviewById(id) {
-    const res = await fetch(`/api/reviews/${encodeURIComponent(id)}`);
+    const res = await apiFetch(`/api/reviews/${encodeURIComponent(id)}`);
     if (!res.ok) return;
     const data = await res.json();
     currentReview = data.review;
@@ -324,6 +498,10 @@
       review.prNumber ? ` #${review.prNumber}` : ''
     }`;
     document.getElementById('viewEngineTag').textContent = `${review.providerUsed}/${review.modelUsed} (${review.durationMs}ms)`;
+    const telemetry = review.scannerTelemetry;
+    document.getElementById('viewScannerTelemetry').textContent = telemetry
+      ? `Scanners: ${telemetry.scannersRun.join(', ') || 'none'} · skipped: ${telemetry.scannersSkipped.join(', ') || 'none'}`
+      : 'Scanners: not requested for this diff-only review';
 
     document.getElementById('kpiEffort').textContent = `Effort: ${w.effortScore}/5 (~${w.estimatedMinutes}m)`;
     const kpiRisk = document.getElementById('kpiRisk');
@@ -598,7 +776,7 @@
         replyOutput.classList.remove('hidden');
         replyOutput.textContent = `🐇 @openrabbit is thinking (${cmd})...`;
 
-        const res = await fetch('/api/chat', {
+        const res = await apiFetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -637,7 +815,7 @@
     output.classList.remove('hidden');
     output.textContent = '🐇 @openrabbit is analyzing your PR context...';
 
-    const res = await fetch('/api/chat', {
+    const res = await apiFetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -676,7 +854,7 @@
 
   // History & Analytics Tab
   async function loadHistoryAndAnalytics() {
-    const res = await fetch('/api/reviews');
+    const res = await apiFetch('/api/reviews');
     const data = await res.json();
     renderAnalyticsAndHistory(data.reviews || [], data.analytics || {});
   }
@@ -814,7 +992,7 @@
 
   document.getElementById('btnSaveYamlConfig').addEventListener('click', async () => {
     const yaml = document.getElementById('textareaYamlConfig').value;
-    const res = await fetch('/api/config', {
+    const res = await apiFetch('/api/config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ yaml }),
@@ -832,7 +1010,7 @@
 
   async function loadRulesStudio() {
     try {
-      const res = await fetch('/api/rules');
+      const res = await apiFetch('/api/rules');
       const data = await res.json();
       customRules = data.customRules || [];
       builtinRules = data.builtinCatalog || [];
@@ -1087,7 +1265,7 @@
 
   async function saveSingleRule(rule) {
     try {
-      const res = await fetch('/api/rules', {
+      const res = await apiFetch('/api/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rule),
@@ -1106,7 +1284,7 @@
 
   async function deleteCustomRule(id) {
     try {
-      const res = await fetch(`/api/rules/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`/api/rules/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
       const data = await res.json();
@@ -1173,7 +1351,7 @@
     };
 
     try {
-      const res = await fetch('/api/rules', {
+      const res = await apiFetch('/api/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(ruleObj),
@@ -1204,7 +1382,7 @@
     const toast = document.getElementById('rulesConfigToast');
 
     try {
-      const res = await fetch('/api/rules/config', {
+      const res = await apiFetch('/api/rules/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1247,12 +1425,12 @@
   // Load starter rules
   document.getElementById('btnLoadStarterRules')?.addEventListener('click', async () => {
     try {
-      const res = await fetch('/api/rules');
+      const res = await apiFetch('/api/rules');
       const data = await res.json();
       const starters = data.starterRules || [];
       if (starters.length === 0) return;
 
-      const importRes = await fetch('/api/rules/import', {
+      const importRes = await apiFetch('/api/rules/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rules: starters }),
@@ -1276,7 +1454,7 @@
   // Export JSON
   document.getElementById('btnExportRules')?.addEventListener('click', async () => {
     try {
-      const res = await fetch('/api/rules/export');
+      const res = await apiFetch('/api/rules/export');
       const data = await res.json();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -1309,7 +1487,7 @@
           alert('Import requires valid JSON (Schema v1).');
           return;
         }
-        const res = await fetch('/api/rules/import', {
+        const res = await apiFetch('/api/rules/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1376,7 +1554,7 @@
     }
 
     try {
-      const res = await fetch('/api/rules/test', {
+      const res = await apiFetch('/api/rules/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1439,7 +1617,7 @@
   document.getElementById('btnSaveBuiltinSubset')?.addEventListener('click', async () => {
     const checkedIds = Array.from(document.querySelectorAll('.builtin-rule-checkbox:checked')).map((cb) => cb.getAttribute('data-rule-id'));
     try {
-      const res = await fetch('/api/rules/config', {
+      const res = await apiFetch('/api/rules/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1465,7 +1643,7 @@
     const out = document.getElementById('webhookSimResult');
     out.textContent = 'Dispatching POST /api/webhooks/github (X-GitHub-Event: pull_request)...';
     const tpl = templates[0] || {};
-    const res = await fetch('/api/webhooks/github', {
+    const res = await apiFetch('/api/webhooks/github', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1493,7 +1671,7 @@
     const out = document.getElementById('webhookSimResult');
     out.textContent = 'Dispatching POST /api/webhooks/github (X-GitHub-Event: issue_comment)...';
     const tpl = templates[0] || {};
-    const res = await fetch('/api/webhooks/github', {
+    const res = await apiFetch('/api/webhooks/github', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1517,7 +1695,7 @@
     const out = document.getElementById('webhookSimResult');
     out.textContent = 'Dispatching POST /api/webhooks/gitlab (X-Gitlab-Event: Merge Request Hook)...';
     const tpl = templates[1] || templates[0] || {};
-    const res = await fetch('/api/webhooks/gitlab', {
+    const res = await apiFetch('/api/webhooks/gitlab', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1546,7 +1724,7 @@
     const out = document.getElementById('webhookSimResult');
     out.textContent = 'Dispatching POST /api/webhooks/bitbucket (X-Event-Key: pullrequest:created)...';
     const tpl = templates[0] || {};
-    const res = await fetch('/api/webhooks/bitbucket', {
+    const res = await apiFetch('/api/webhooks/bitbucket', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1574,7 +1752,7 @@
 
   async function loadRepositories() {
     try {
-      const res = await fetch('/api/repos');
+      const res = await apiFetch('/api/repos');
       const data = await res.json();
       repositories = data.repositories || [];
       renderRepositoriesList();
@@ -1657,7 +1835,7 @@
 
       card.querySelector('.btn-remove-repo').addEventListener('click', async () => {
         if (confirm(`Remove repository "${repo.name}" from OpenRabbit?`)) {
-          await fetch(`/api/repos/${repo.id}`, { method: 'DELETE' });
+          await apiFetch(`/api/repos/${repo.id}`, { method: 'DELETE' });
           if (selectedRepository && selectedRepository.id === repo.id) {
             selectedRepository = null;
           }
@@ -1717,7 +1895,7 @@
 
   async function loadSubrepos(repoIdOrPath) {
     try {
-      const res = await fetch(`/api/repos/subrepos?id=${encodeURIComponent(repoIdOrPath)}`);
+      const res = await apiFetch(`/api/repos/subrepos?id=${encodeURIComponent(repoIdOrPath)}`);
       const data = await res.json();
       currentSubrepos = data.subrepos || [];
 
@@ -1829,7 +2007,7 @@
 
       card.querySelector('.btn-pin-subrepo')?.addEventListener('click', async () => {
         try {
-          const res = await fetch('/api/repos', {
+          const res = await apiFetch('/api/repos', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1859,7 +2037,7 @@
     tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding: 20px; color: var(--text-muted);">Loading commits...</td></tr>';
 
     try {
-      const res = await fetch(`/api/repos/commits?id=${encodeURIComponent(repoIdOrPath)}&maxCount=40`);
+      const res = await apiFetch(`/api/repos/commits?id=${encodeURIComponent(repoIdOrPath)}&maxCount=40`);
       const data = await res.json();
       if (data.error) {
         tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="padding: 20px; color: #f87171;">Error: ${escapeHtml(data.error)}</td></tr>`;
@@ -1920,7 +2098,7 @@
     document.getElementById('viewPrTitle').textContent = `Reviewing commit ${commitSha.slice(0, 7)}: ${subject || ''}...`;
 
     try {
-      const res = await fetch('/api/repos/review', {
+      const res = await apiFetch('/api/repos/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1953,7 +2131,7 @@
   async function reviewRepositoryWorkingTree(repoIdOrPath) {
     switchToTab('studio');
     try {
-      const res = await fetch('/api/repos/review', {
+      const res = await apiFetch('/api/repos/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1984,7 +2162,7 @@
   async function reviewRepositoryStaged(repoIdOrPath) {
     switchToTab('studio');
     try {
-      const res = await fetch('/api/repos/review', {
+      const res = await apiFetch('/api/repos/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2035,7 +2213,7 @@
       }
       commitSelect.innerHTML = '<option value="">Loading commits...</option>';
       try {
-        const res = await fetch(`/api/repos/commits?id=${encodeURIComponent(repoId)}&maxCount=25`);
+        const res = await apiFetch(`/api/repos/commits?id=${encodeURIComponent(repoId)}&maxCount=25`);
         const data = await res.json();
         const commits = data.commits || [];
         commitSelect.innerHTML = '<option value="">⚡ Working Tree / Uncommitted Changes</option>';
@@ -2059,7 +2237,7 @@
       return;
     }
     if (!commitSha) {
-      const res = await fetch('/api/repos/review', {
+      const res = await apiFetch('/api/repos/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: repoId }),
@@ -2073,7 +2251,7 @@
       }
       return;
     }
-    const res = await fetch(`/api/repos/commit?id=${encodeURIComponent(repoId)}&sha=${encodeURIComponent(commitSha)}`);
+    const res = await apiFetch(`/api/repos/commit?id=${encodeURIComponent(repoId)}&sha=${encodeURIComponent(commitSha)}`);
     const data = await res.json();
     if (data.diff) {
       document.getElementById('textareaDiff').value = data.diff;
@@ -2118,7 +2296,7 @@
     feedback.classList.remove('hidden');
 
     try {
-      const res = await fetch('/api/repos', {
+      const res = await apiFetch('/api/repos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2163,7 +2341,7 @@
     button.disabled = true;
     button.textContent = 'Scanning…';
     try {
-      const res = await fetch('/api/repos/security-scan', {
+      const res = await apiFetch('/api/repos/security-scan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: selectedRepository.id }),
       });
@@ -2222,7 +2400,7 @@
     }
 
     try {
-      const res = await fetch('/api/repos/subrepos/register', {
+      const res = await apiFetch('/api/repos/subrepos/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rootId: selectedRepository.id }),
@@ -2275,7 +2453,7 @@
       const url = targetPath
         ? `/api/fs/browse?path=${encodeURIComponent(targetPath)}`
         : '/api/fs/browse';
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       const data = await res.json();
       currentFsBrowseData = data;
       renderFsBrowse(data);
@@ -2482,7 +2660,7 @@
     if (!selectedFsFolder) return;
     const feedback = document.getElementById('addRepoFeedback');
     try {
-      const res = await fetch('/api/repos', {
+      const res = await apiFetch('/api/repos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2541,6 +2719,21 @@
         alert('Invalid GitHub PR format. Use: owner/repo#123 or https://github.com/owner/repo/pull/123');
         return;
       }
+    } else if (platform === 'forgejo') {
+      const prUrlMatch = target.match(/codeberg\.org\/([^/]+)\/([^/]+)\/pulls\/(\d+)/);
+      const shortMatch = target.match(/^([^/]+)\/([^#]+)#(\d+)$/);
+      if (prUrlMatch) {
+        body.owner = prUrlMatch[1];
+        body.repo = prUrlMatch[2];
+        body.pullNumber = Number(prUrlMatch[3]);
+      } else if (shortMatch) {
+        body.owner = shortMatch[1];
+        body.repo = shortMatch[2];
+        body.pullNumber = Number(shortMatch[3]);
+      } else {
+        alert('Invalid Codeberg PR format. Use: owner/repo#123 or https://codeberg.org/owner/repo/pulls/123');
+        return;
+      }
     } else if (platform === 'gitlab') {
       const mrUrlMatch = target.match(/gitlab\.com\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/(\d+)/);
       const shortMatch = target.match(/^([^#]+)#(\d+)$/);
@@ -2572,7 +2765,7 @@
     }
 
     try {
-      const res = await fetch(`/api/integrations/${platform}/review`, {
+      const res = await apiFetch(`/api/integrations/${platform}/review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -2601,5 +2794,229 @@
     }
   });
 
-  initApp();
+  // ==========================================================================
+  // Simple onboarding, authentication, and background jobs
+  // ==========================================================================
+  document.getElementById('btnTryDemo').addEventListener('click', async () => {
+    if (!templates.length) {
+      document.getElementById('quickRemoteStatus').textContent =
+        'Demo templates are still loading. Try again in a moment.';
+      return;
+    }
+    selectTemplate(templates[0], false);
+    activateTopTab('studio');
+    await executeReview();
+  });
+
+  document.getElementById('btnConnectProvider').addEventListener('click', () => {
+    openSettingsSection('webhooks');
+  });
+
+  document.getElementById('btnHomeOpenActivity').addEventListener('click', () => {
+    activateTopTab('history');
+  });
+
+  function connectionDefinition(provider) {
+    const base = publicUrl || window.location.origin;
+    const definitions = {
+      github: {
+        path: '/api/webhooks/github',
+        token: 'GITHUB_TOKEN',
+        secret: 'GITHUB_WEBHOOK_SECRET',
+        configured: Boolean(serverStatus?.webhooks?.githubConfigured),
+        events: 'Pull requests, Pull request review comments, and Issue comments',
+        steps: 'GitHub → Repository settings → Webhooks → Add webhook. Use JSON, paste the secret, and select the events above.',
+      },
+      forgejo: {
+        path: '/api/webhooks/forgejo',
+        token: 'FORGEJO_TOKEN',
+        secret: 'FORGEJO_WEBHOOK_SECRET',
+        configured: Boolean(serverStatus?.webhooks?.forgejoConfigured),
+        events: 'Pull request and Pull request comment',
+        steps: 'Codeberg/Forgejo → Repository settings → Webhooks → Add webhook (Forgejo type). Use JSON, paste the secret, and select the PR events.',
+      },
+      gitlab: {
+        path: '/api/webhooks/gitlab',
+        token: 'GITLAB_TOKEN',
+        secret: 'GITLAB_WEBHOOK_SECRET',
+        configured: Boolean(serverStatus?.webhooks?.gitlabConfigured),
+        events: 'Merge request events and Comments',
+        steps: 'GitLab → Project settings → Webhooks. Paste the secret token and select Merge request events and Comments.',
+      },
+      bitbucket: {
+        path: '/api/webhooks/bitbucket',
+        token: 'BITBUCKET_TOKEN',
+        secret: 'BITBUCKET_WEBHOOK_SECRET',
+        configured: Boolean(serverStatus?.webhooks?.bitbucketConfigured),
+        events: 'Pull request created, updated, and comment created',
+        steps: 'Bitbucket → Repository settings → Webhooks → Add webhook. Paste the secret and select Pull request and Comment events.',
+      },
+    };
+    const definition = definitions[provider] || definitions.github;
+    return { ...definition, url: `${base}${definition.path}` };
+  }
+
+  function updateConnectionGuide() {
+    const select = document.getElementById('selectConnectionPlatform');
+    if (!select) return;
+    const provider = select.value;
+    const definition = connectionDefinition(provider);
+    document.getElementById('connectionWebhookUrl').textContent = definition.url;
+    document.getElementById('connectionConfiguredBadge').textContent =
+      definition.configured ? 'Token configured' : 'Token not configured';
+    const secretConfigured = Boolean(
+      serverStatus?.webhooks?.[`${provider}WebhookConfigured`]
+    );
+    document.getElementById('connectionGuide').innerHTML = `
+      <ol>
+        <li>${escapeHtml(definition.steps)}</li>
+        <li>Payload URL: <code>${escapeHtml(definition.url)}</code></li>
+        <li>Events: ${escapeHtml(definition.events)}</li>
+        <li>Server token: <code>${escapeHtml(definition.token)}</code> · webhook secret: <code>${escapeHtml(definition.secret)}</code> (${secretConfigured ? 'configured' : 'not configured'})</li>
+        <li>Set provider tokens in <code>.env</code>, restart the container, then open a test PR.</li>
+      </ol>
+    `;
+  }
+
+  document.getElementById('selectConnectionPlatform').addEventListener('change', updateConnectionGuide);
+  document.getElementById('btnCopyWebhookUrl').addEventListener('click', async () => {
+    const text = document.getElementById('connectionWebhookUrl').textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      document.getElementById('connectionConfiguredBadge').textContent = 'URL copied';
+    } catch {
+      document.getElementById('connectionConfiguredBadge').textContent = 'Copy failed';
+    }
+  });
+
+  async function runQuickRemoteReview() {
+    const input = document.getElementById('inputQuickPrUrl');
+    const status = document.getElementById('quickRemoteStatus');
+    const raw = input.value.trim();
+    if (!raw) {
+      status.textContent = 'Paste a pull request URL first.';
+      return;
+    }
+
+    let url;
+    try {
+      url = new URL(raw);
+    } catch {
+      status.textContent = 'Enter a full pull request URL.';
+      return;
+    }
+    const parts = url.pathname.split('/').filter(Boolean);
+    let endpoint = '';
+    let body = null;
+
+    if (url.hostname === 'github.com' && parts[2] === 'pull') {
+      endpoint = '/api/integrations/github/review';
+      body = { owner: parts[0], repo: parts[1], pullNumber: Number(parts[3]) };
+    } else if (parts[2] === 'pulls' && parts.length === 4) {
+      endpoint = '/api/integrations/forgejo/review';
+      body = { owner: parts[0], repo: parts[1], pullNumber: Number(parts[3]) };
+    } else if (url.pathname.includes('/-/merge_requests/')) {
+      const marker = parts.indexOf('-');
+      endpoint = '/api/integrations/gitlab/review';
+      body = {
+        projectId: parts.slice(0, marker).join('/'),
+        mrIid: Number(parts[parts.length - 1]),
+      };
+    } else if (parts[2] === 'pull-requests') {
+      endpoint = '/api/integrations/bitbucket/review';
+      body = {
+        workspace: parts[0],
+        repoSlug: parts[1],
+        pullRequestId: Number(parts[3]),
+      };
+    }
+
+    if (!endpoint || !body) {
+      status.textContent = 'Unsupported PR URL. Use GitHub, Codeberg, GitLab, or Bitbucket.';
+      return;
+    }
+
+    status.textContent = 'Reviewing…';
+    try {
+      const response = await apiFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        throw new Error(data.error || 'Review failed.');
+      }
+      currentReview = data.review;
+      currentParsedDiff = data.parsedDiff;
+      if (currentReview.rawDiff) {
+        document.getElementById('textareaDiff').value = currentReview.rawDiff;
+        document.getElementById('inputPrTitle').value = currentReview.prTitle;
+        document.getElementById('inputRepoName').value = currentReview.repository;
+        updateDiffLineCounter();
+      }
+      renderReviewStudio(currentReview, currentParsedDiff);
+      status.textContent = 'Review complete.';
+      await refreshHomeRecent();
+      activateTopTab('studio');
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  }
+
+  document.getElementById('btnQuickRemoteReview').addEventListener('click', runQuickRemoteReview);
+  document.getElementById('inputQuickPrUrl').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') runQuickRemoteReview();
+  });
+
+  document.getElementById('loginForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const status = document.getElementById('loginStatus');
+    const token = document.getElementById('loginToken').value;
+    status.classList.add('hidden');
+    try {
+      await loginWithToken(token);
+    } catch (error) {
+      status.textContent = error.message;
+      status.classList.remove('hidden');
+      status.classList.add('error');
+    }
+  });
+
+  document.getElementById('btnLogout').addEventListener('click', async () => {
+    await nativeFetch('/api/session', {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    }).catch(() => undefined);
+    currentReview = null;
+    currentParsedDiff = null;
+    repositories = [];
+    serverStatus = null;
+    appStarted = false;
+    document.getElementById('homeRecentReviews').innerHTML =
+      '<div class="empty-state">Sign in to load recent reviews.</div>';
+    showLoginScreen();
+  });
+
+  async function boot() {
+    try {
+      const response = await nativeFetch('/api/session', {
+        credentials: 'same-origin',
+      });
+      const session = await response.json();
+      if (session.authenticated) {
+        showAppShell();
+        await initApp();
+      } else {
+        showLoginScreen();
+      }
+    } catch (error) {
+      showLoginScreen();
+      const status = document.getElementById('loginStatus');
+      status.textContent = `Cannot reach server: ${error.message}`;
+      status.classList.remove('hidden');
+    }
+  }
+
+  boot();
 })();

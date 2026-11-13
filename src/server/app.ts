@@ -34,6 +34,12 @@ import { ReviewJobQueue } from '../core/job-queue.js';
 import { buildRepositorySecurityDiff } from '../core/repository-security-scan.js';
 import { exceedsFailureThreshold, formatSarifReport, type FailureThreshold } from '../core/sarif-formatter.js';
 import {
+  clearedSessionCookie,
+  isAuthenticated,
+  sessionCookie,
+  tokensEqual,
+} from './auth.js';
+import {
   handleBitbucketWebhookEvent,
   runBitbucketOnDemandReview,
   verifyBitbucketWebhook,
@@ -43,6 +49,11 @@ import {
   runGitHubOnDemandReview,
   verifyGitHubWebhookSignature,
 } from '../integrations/github.js';
+import {
+  handleForgejoWebhookEvent,
+  runForgejoOnDemandReview,
+  verifyForgejoWebhookSignature,
+} from '../integrations/forgejo.js';
 import {
   handleGitLabWebhookEvent,
   runGitLabOnDemandReview,
@@ -63,13 +74,45 @@ export interface ServerInstance {
   close: () => Promise<void>;
 }
 
-function readBody(req: http.IncomingMessage): Promise<string> {
+class RequestError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+function readBody(
+  req: http.IncomingMessage,
+  maxBytes = Number(process.env.OPENRABBIT_MAX_BODY_BYTES || 2 * 1024 * 1024)
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    let received = 0;
+    let tooLarge = false;
+    req.on('data', (chunk) => {
+      if (tooLarge) return;
+      const buffer = Buffer.from(chunk);
+      received += buffer.length;
+      if (received > maxBytes) {
+        tooLarge = true;
+        reject(new RequestError(413, 'Request body too large'));
+        return;
+      }
+      chunks.push(buffer);
+    });
+    req.on('end', () => {
+      if (!tooLarge) resolve(Buffer.concat(chunks).toString('utf8'));
+    });
     req.on('error', reject);
   });
+}
+
+function applySecurityHeaders(res: http.ServerResponse): void {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
 }
 
 function sendJson(
@@ -78,12 +121,10 @@ function sendJson(
   payload: unknown
 ): void {
   const body = JSON.stringify(payload);
+  applySecurityHeaders(res);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-    'Access-Control-Allow-Headers':
-      'Content-Type, X-GitHub-Event, X-Hub-Signature-256, X-Gitlab-Event, X-Gitlab-Token',
+    'Cache-Control': 'no-store',
   });
   res.end(body);
 }
@@ -99,16 +140,25 @@ const MIME_TYPES: Record<string, string> = {
 
 export async function createOpenRabbitServer(options: {
   port?: number;
+  host?: string;
   workspaceDir?: string;
   storageDir?: string;
 } = {}): Promise<ServerInstance> {
+  const adminToken = process.env.OPENRABBIT_ADMIN_TOKEN;
+  if (process.env.NODE_ENV === 'production' && !adminToken) {
+    throw new Error('OPENRABBIT_ADMIN_TOKEN is required when NODE_ENV=production');
+  }
+
   const workspaceDir = options.workspaceDir || process.cwd();
-  const resolvedStorageDir = options.storageDir || path.join(workspaceDir, 'data');
+  const resolvedStorageDir =
+    options.storageDir ||
+    process.env.OPENRABBIT_DATA_DIR ||
+    path.join(workspaceDir, 'data');
   const store = new ReviewStore(resolvedStorageDir);
   await store.init();
 
   interface WebhookJobPayload {
-    provider: 'github' | 'gitlab' | 'bitbucket';
+    provider: 'github' | 'gitlab' | 'bitbucket' | 'forgejo';
     eventName: string;
     payload: any;
   }
@@ -120,6 +170,8 @@ export async function createOpenRabbitServer(options: {
       result = await handleGitHubWebhookEvent(jobPayload.eventName, jobPayload.payload, config);
     } else if (jobPayload.provider === 'gitlab') {
       result = await handleGitLabWebhookEvent(jobPayload.eventName, jobPayload.payload, config);
+    } else if (jobPayload.provider === 'forgejo') {
+      result = await handleForgejoWebhookEvent(jobPayload.eventName, jobPayload.payload, config);
     } else {
       result = await handleBitbucketWebhookEvent(jobPayload.eventName, jobPayload.payload, config);
     }
@@ -138,8 +190,18 @@ export async function createOpenRabbitServer(options: {
   };
 
   const jobQueue = new ReviewJobQueue<WebhookJobPayload, { handled: boolean; message?: string; reviewResult?: any }>({
-    concurrency: 2,
-    maxAttempts: 2,
+    concurrency: Math.max(
+      1,
+      Math.min(4, Number(process.env.OPENRABBIT_JOB_CONCURRENCY || 1) || 1)
+    ),
+    maxAttempts: Math.max(
+      1,
+      Math.min(5, Number(process.env.OPENRABBIT_JOB_MAX_ATTEMPTS || 3) || 3)
+    ),
+    retryDelayMs: Math.max(
+      0,
+      Number(process.env.OPENRABBIT_RETRY_DELAY_MS || 1000) || 1000
+    ),
     persistPath: path.join(resolvedStorageDir, 'jobs.json'),
     processor: async (job) => executeWebhook(job.payload),
   });
@@ -153,19 +215,67 @@ export async function createOpenRabbitServer(options: {
 
   const server = http.createServer(async (req, res) => {
     try {
+      applySecurityHeaders(res);
       if (req.method === 'OPTIONS') {
-        res.writeHead(204, {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-          'Access-Control-Allow-Headers':
-            'Content-Type, X-GitHub-Event, X-Hub-Signature-256, X-Gitlab-Event, X-Gitlab-Token',
-        });
+        res.writeHead(204);
         res.end();
         return;
       }
 
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
       const pathname = url.pathname;
+
+      // Health must stay public for Docker, tunnels, and uptime checks.
+      if (pathname === '/healthz' && req.method === 'GET') {
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (pathname === '/api/session' && req.method === 'POST') {
+        let body: { token?: unknown } = {};
+        try {
+          body = JSON.parse((await readBody(req, 16 * 1024)) || '{}');
+        } catch (error) {
+          if (error instanceof RequestError) throw error;
+          sendJson(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        const providedToken = typeof body.token === 'string' ? body.token : '';
+        if (!adminToken || !tokensEqual(providedToken, adminToken)) {
+          sendJson(res, 401, { error: 'Invalid admin token' });
+          return;
+        }
+        const secure =
+          process.env.OPENRABBIT_PUBLIC_URL?.startsWith('https://') === true;
+        res.setHeader('Set-Cookie', sessionCookie(adminToken, secure));
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      if (pathname === '/api/session' && req.method === 'DELETE') {
+        res.setHeader('Set-Cookie', clearedSessionCookie());
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      if (pathname === '/api/session' && req.method === 'GET') {
+        sendJson(res, 200, {
+          authenticated: isAuthenticated(req, adminToken),
+        });
+        return;
+      }
+
+      // Provider webhooks authenticate with their own signatures below.
+      if (
+        pathname.startsWith('/api/') &&
+        !pathname.startsWith('/api/webhooks/') &&
+        !isAuthenticated(req, adminToken)
+      ) {
+        sendJson(res, 401, { error: 'Authentication required' });
+        return;
+      }
 
       // ======================================================================
       // API Routes
@@ -180,6 +290,7 @@ export async function createOpenRabbitServer(options: {
         const repositories = await store.listRepositories();
         sendJson(res, 200, {
           version: '1.0.0',
+          publicUrl: process.env.OPENRABBIT_PUBLIC_URL || null,
           activeProvider,
           providers: getProvidersStatus(),
           config,
@@ -191,6 +302,11 @@ export async function createOpenRabbitServer(options: {
             githubConfigured: Boolean(process.env.GITHUB_TOKEN),
             gitlabConfigured: Boolean(process.env.GITLAB_TOKEN),
             bitbucketConfigured: Boolean(process.env.BITBUCKET_TOKEN),
+            forgejoConfigured: Boolean(process.env.FORGEJO_TOKEN),
+            githubWebhookConfigured: Boolean(process.env.GITHUB_WEBHOOK_SECRET),
+            gitlabWebhookConfigured: Boolean(process.env.GITLAB_WEBHOOK_SECRET),
+            bitbucketWebhookConfigured: Boolean(process.env.BITBUCKET_WEBHOOK_SECRET),
+            forgejoWebhookConfigured: Boolean(process.env.FORGEJO_WEBHOOK_SECRET),
           },
         });
         return;
@@ -987,6 +1103,37 @@ export async function createOpenRabbitServer(options: {
         return;
       }
 
+      if (
+        pathname === '/api/integrations/forgejo/review' &&
+        req.method === 'POST'
+      ) {
+        const rawBody = await readBody(req);
+        const body = JSON.parse(rawBody || '{}');
+        const { owner, repo, pullNumber, commitSha, token, postComment } = body;
+        if (!owner || !repo) {
+          sendJson(res, 400, { error: 'owner and repo are required.' });
+          return;
+        }
+
+        try {
+          const review = await runForgejoOnDemandReview({
+            owner,
+            repo,
+            pullNumber: pullNumber ? Number(pullNumber) : undefined,
+            commitSha,
+            token,
+            postComment: Boolean(postComment),
+          });
+          await store.addReview(review);
+          const parsedDiff = parseUnifiedDiff(review.rawDiff || '');
+          const analytics = await store.getAnalyticsSummary();
+          sendJson(res, 200, { review, parsedDiff, analytics });
+        } catch (err) {
+          sendJson(res, 400, { error: (err as Error).message });
+        }
+        return;
+      }
+
       // ======================================================================
       // Async Review Job Queue Endpoints
       // ======================================================================
@@ -1016,7 +1163,7 @@ export async function createOpenRabbitServer(options: {
         process.env.OPENRABBIT_ASYNC_WEBHOOKS === 'true';
 
       const dispatchWebhook = async (
-        provider: 'github' | 'gitlab' | 'bitbucket',
+        provider: 'github' | 'gitlab' | 'bitbucket' | 'forgejo',
         eventName: string,
         payload: any,
         dedupKey: string
@@ -1059,7 +1206,12 @@ export async function createOpenRabbitServer(options: {
         }
 
         const payload = JSON.parse(rawBody || '{}');
-        const dedupKey = `github:${payload.repository?.full_name || 'unknown'}:${payload.pull_request?.number || payload.number || 0}:${payload.pull_request?.head?.sha || eventName}`;
+        const deliveryId = req.headers['x-github-delivery'] as string | undefined;
+        const dedupKey = deliveryId
+          ? `github:delivery:${deliveryId}`
+          : `github:${payload.repository?.full_name || 'unknown'}:${
+              payload.pull_request?.number || payload.issue?.number || payload.number || 0
+            }:${payload.pull_request?.head?.sha || payload.comment?.id || eventName}`;
         await dispatchWebhook('github', eventName, payload, dedupKey);
         return;
       }
@@ -1081,7 +1233,12 @@ export async function createOpenRabbitServer(options: {
         }
 
         const payload = JSON.parse(rawBody || '{}');
-        const dedupKey = `gitlab:${payload.project?.path_with_namespace || 'unknown'}:${payload.object_attributes?.iid || 0}:${payload.object_attributes?.last_commit?.id || eventHeader}`;
+        const deliveryId = req.headers['x-gitlab-event-uuid'] as string | undefined;
+        const dedupKey = deliveryId
+          ? `gitlab:delivery:${deliveryId}`
+          : `gitlab:${payload.project?.path_with_namespace || 'unknown'}:${
+              payload.object_attributes?.iid || payload.merge_request?.iid || 0
+            }:${payload.object_attributes?.last_commit?.id || payload.object_attributes?.noteable_id || eventHeader}`;
         await dispatchWebhook('gitlab', eventHeader, payload, dedupKey);
         return;
       }
@@ -1105,9 +1262,67 @@ export async function createOpenRabbitServer(options: {
         }
 
         const payload = JSON.parse(rawBody || '{}');
-        const dedupKey = `bitbucket:${payload.repository?.full_name || 'unknown'}:${payload.pullrequest?.id || 0}:${payload.pullrequest?.source?.commit?.hash || eventKey}`;
+        const deliveryId =
+          (req.headers['x-request-uuid'] as string | undefined) ||
+          (req.headers['x-hook-uuid'] as string | undefined);
+        const dedupKey = deliveryId
+          ? `bitbucket:delivery:${deliveryId}:${payload.comment?.id || payload.pullrequest?.id || 0}`
+          : `bitbucket:${payload.repository?.full_name || 'unknown'}:${payload.pullrequest?.id || 0}:${payload.pullrequest?.source?.commit?.hash || payload.comment?.id || eventKey}`;
         await dispatchWebhook('bitbucket', eventKey, payload, dedupKey);
         return;
+      }
+
+      if (
+        (pathname === '/api/webhooks/forgejo' ||
+          pathname === '/api/webhooks/codeberg') &&
+        req.method === 'POST'
+      ) {
+        const rawBody = await readBody(req);
+        const signature = (req.headers['x-gitea-signature'] ||
+          req.headers['x-hub-signature-256']) as string | undefined;
+        const eventName =
+          (req.headers['x-gitea-event'] as string) ||
+          (req.headers['x-github-event'] as string) ||
+          'pull_request';
+
+        if (
+          !verifyForgejoWebhookSignature(
+            rawBody,
+            signature,
+            process.env.FORGEJO_WEBHOOK_SECRET
+          )
+        ) {
+          sendJson(res, 401, { error: 'Invalid Codeberg webhook signature' });
+          return;
+        }
+
+        const payload = JSON.parse(rawBody || '{}');
+        const deliveryId = req.headers['x-gitea-delivery'] as string | undefined;
+        const dedupKey = deliveryId
+          ? `forgejo:delivery:${deliveryId}`
+          : `forgejo:${payload.repository?.full_name || 'unknown'}:${
+              payload.pull_request?.number || payload.issue?.number || payload.number || 0
+            }:${payload.pull_request?.head?.sha || payload.comment?.id || eventName}`;
+        await dispatchWebhook('forgejo', eventName, payload, dedupKey);
+        return;
+      }
+
+      // ======================================================================
+      // Local frontend vendor assets (no third-party CDN dependency)
+      // ======================================================================
+      if (pathname === '/vendor/mermaid.min.js' && req.method === 'GET') {
+        const mermaidFile = path.resolve(
+          __dirname,
+          '../../node_modules/mermaid/dist/mermaid.min.js'
+        );
+        if (fs.existsSync(mermaidFile)) {
+          res.writeHead(200, {
+            'Content-Type': 'application/javascript; charset=utf-8',
+            'Cache-Control': 'public, max-age=86400',
+          });
+          fs.createReadStream(mermaidFile).pipe(res);
+          return;
+        }
       }
 
       // ======================================================================
@@ -1129,6 +1344,10 @@ export async function createOpenRabbitServer(options: {
 
       sendJson(res, 404, { error: `Not found: ${pathname}` });
     } catch (err) {
+      if (err instanceof RequestError) {
+        sendJson(res, err.status, { error: err.message });
+        return;
+      }
       console.error('[OpenRabbit Server Error]', err);
       sendJson(res, 500, {
         error: (err as Error).message || 'Internal Server Error',
@@ -1143,7 +1362,10 @@ export async function createOpenRabbitServer(options: {
 
   return new Promise((resolve, reject) => {
     server.on('error', reject);
-    server.listen(requestedPort, () => {
+    server.listen(
+      requestedPort,
+      options.host || process.env.HOST || '127.0.0.1',
+      () => {
       const addr = server.address();
       const actualPort =
         typeof addr === 'object' && addr ? addr.port : requestedPort;

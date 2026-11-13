@@ -36,7 +36,7 @@ export interface RunReviewOptions {
   baseBranch?: string;
   headBranch?: string;
   commitSha?: string;
-  source?: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'playground';
+  source?: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'forgejo' | 'playground';
   config?: OpenRabbitConfig;
   reviewer?: 'hybrid' | 'custom' | 'static-only' | 'llm-only';
   securityScanScope?: { skippedFiles: number };

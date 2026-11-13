@@ -31,6 +31,10 @@ import {
   runGitHubOnDemandReview,
   upsertGitHubWalkthroughComment,
 } from '../integrations/github.js';
+import {
+  parseForgejoTarget,
+  runForgejoOnDemandReview,
+} from '../integrations/forgejo.js';
 import { runGitLabOnDemandReview } from '../integrations/gitlab.js';
 import { createOpenRabbitServer } from '../server/app.js';
 import {
@@ -582,7 +586,29 @@ async function runCli(): Promise<void> {
       }
     }
 
-    // 2. Live GitLab on-demand review
+    // 2. Live Codeberg / Forgejo on-demand review
+    const forgejoInput = flags.forgejo || flags.codeberg;
+    if (typeof forgejoInput === 'string') {
+      const target = parseForgejoTarget(forgejoInput);
+      if (!target) {
+        throw new Error(
+          'Invalid Codeberg target. Use owner/repo#123 or https://codeberg.org/owner/repo/pulls/123.'
+        );
+      }
+      const forgejoResult = await runForgejoOnDemandReview({
+        owner: target.owner,
+        repo: target.repo,
+        pullNumber: target.pullNumber,
+        token: process.env.FORGEJO_TOKEN,
+        postComment: Boolean(flags['post-comment']),
+        config,
+      });
+      await store.addReview(forgejoResult);
+      emitReview(forgejoResult);
+      return;
+    }
+
+    // 3. Live GitLab on-demand review
     const glInput = flags.gitlab || flags['gitlab-url'];
     if (typeof glInput === 'string') {
       let projectId: string | number = '';
@@ -816,6 +842,8 @@ async function runCli(): Promise<void> {
     ${ANSI.dim}--file <patch>${ANSI.reset}                  Review a specific .diff / .patch file
     ${ANSI.dim}--demo [id]${ANSI.reset}                     Run against a sample PR diff (auth-jwt-sqli | react-billing-hook | clean-stream-worker)
     ${ANSI.dim}--github <owner/repo#pr>${ANSI.reset}       Review a live GitHub Pull Request or commit
+    ${ANSI.dim}--forgejo <owner/repo#pr>${ANSI.reset}      Review a live Codeberg/Forgejo Pull Request
+    ${ANSI.dim}--codeberg <owner/repo#pr>${ANSI.reset}     Alias for --forgejo
     ${ANSI.dim}--gitlab <project#mr>${ANSI.reset}          Review a live GitLab Merge Request or commit
     ${ANSI.dim}--bitbucket <workspace/repo#pr>${ANSI.reset} Review a live Bitbucket Pull Request or commit
     ${ANSI.dim}--profile <mode>${ANSI.reset}                Override profile (chill | assertive | security-focused)

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import {
   DEFAULT_OPENRABBIT_CONFIG,
   parseYamlConfig,
@@ -9,18 +10,38 @@ import {
   WALKTHROUGH_COMMENT_MARKER,
 } from '../core/markdown-formatter.js';
 import { runPullRequestReview } from '../core/review-engine.js';
+import {
+  remoteMemoryFilePath,
+  withRemoteWorkspace,
+} from '../core/remote-workspace.js';
 import type {
   InlineFinding,
   OpenRabbitConfig,
   ReviewResult,
 } from '../types/index.js';
 
+function githubGitHost(): string {
+  if (process.env.GITHUB_WEB_HOST) return process.env.GITHUB_WEB_HOST;
+  try {
+    const host = new URL(
+      process.env.GITHUB_API_URL || 'https://api.github.com'
+    ).host;
+    return host === 'api.github.com' ? 'github.com' : host;
+  } catch {
+    return 'github.com';
+  }
+}
+
+function dataDir(): string {
+  return process.env.OPENRABBIT_DATA_DIR || path.join(process.cwd(), 'data');
+}
+
 export function verifyGitHubWebhookSignature(
   rawBody: string,
   signatureHeader: string | undefined,
   secret: string | undefined
 ): boolean {
-  if (!secret) return true; // No secret configured => allow in local/dev mode
+  if (!secret) return process.env.NODE_ENV !== 'production';
   if (!signatureHeader || !signatureHeader.startsWith('sha256=')) {
     return false;
   }
@@ -263,18 +284,36 @@ export async function handleGitHubWebhookEvent(
       }
     }
 
-    const reviewResult = await runPullRequestReview({
-      rawDiff,
-      prTitle,
-      repository: repoFull,
-      prNumber: pullNumber,
-      author,
-      baseBranch,
-      headBranch,
-      commitSha,
-      source: 'github',
-      config,
-    });
+    const runReview = (repoPath?: string) =>
+      runPullRequestReview({
+        rawDiff,
+        prTitle,
+        repository: repoFull,
+        prNumber: pullNumber,
+        author,
+        baseBranch,
+        headBranch,
+        commitSha,
+        source: 'github',
+        config,
+        repoPath,
+        memoryFilePath: remoteMemoryFilePath(dataDir(), 'github', repoFull),
+      });
+
+    const reviewResult = payload.simulated_diff
+      ? await runReview()
+      : await withRemoteWorkspace(
+          {
+            cloneUrl:
+              pr.head?.repo?.clone_url || payload.repository?.clone_url || '',
+            ref: `refs/pull/${pullNumber}/head`,
+            providerHost: githubGitHost(),
+            auth: token
+              ? { username: 'x-access-token', password: token }
+              : undefined,
+          },
+          (workspace) => runReview(workspace.path)
+        );
 
     let postedToGitHub = false;
     if (token && !payload.simulated_diff && owner && repo) {
@@ -343,16 +382,19 @@ export async function handleGitHubWebhookEvent(
       const apiUrl = (
         process.env.GITHUB_API_URL || 'https://api.github.com'
       ).replace(/\/$/, '');
-      await fetch(`${apiUrl}/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
+      const postResponse = await fetch(`${apiUrl}/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
         method: 'POST',
         headers: {
           Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${token}`,
+          Authorization: 'Bearer ' + token,
           'Content-Type': 'application/json',
           'User-Agent': 'OpenRabbit-Bot/1.0',
         },
         body: JSON.stringify({ body: chatRes.replyMarkdown }),
       });
+      if (!postResponse.ok) {
+        throw new Error(`Failed to post GitHub chat reply (${postResponse.status})`);
+      }
       postedToGitHub = true;
     }
 
@@ -501,18 +543,36 @@ export async function runGitHubOnDemandReview(params: {
     throw new Error('Either pullNumber or commitSha is required');
   }
 
-  const reviewResult = await runPullRequestReview({
-    rawDiff,
-    prTitle,
-    repository: `${params.owner}/${params.repo}`,
-    prNumber: params.pullNumber,
-    author,
-    baseBranch,
-    headBranch,
-    commitSha,
-    source: 'github',
-    config,
-  });
+  const repoFull = `${params.owner}/${params.repo}`;
+  const runReview = (repoPath?: string) =>
+    runPullRequestReview({
+      rawDiff,
+      prTitle,
+      repository: repoFull,
+      prNumber: params.pullNumber,
+      author,
+      baseBranch,
+      headBranch,
+      commitSha,
+      source: 'github',
+      config,
+      repoPath,
+      memoryFilePath: remoteMemoryFilePath(dataDir(), 'github', repoFull),
+    });
+
+  const reviewResult = params.pullNumber
+    ? await withRemoteWorkspace(
+        {
+          cloneUrl: `https://${githubGitHost()}/${params.owner}/${params.repo}.git`,
+          ref: `refs/pull/${params.pullNumber}/head`,
+          providerHost: githubGitHost(),
+          auth: token
+            ? { username: 'x-access-token', password: token }
+            : undefined,
+        },
+        (workspace) => runReview(workspace.path)
+      )
+    : await runReview();
 
   if (params.postComment && token && params.pullNumber) {
     await upsertGitHubWalkthroughComment(
