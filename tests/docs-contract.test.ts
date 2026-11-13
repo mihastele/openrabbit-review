@@ -5,6 +5,9 @@ import { describe, it } from 'node:test';
 
 const DOCS = [
   'README.md',
+  'docs/getting-started.md',
+  'docs/dashboard.md',
+  'docs/cli.md',
   'docs/features.md',
   'docs/configuration.md',
   'docs/operations.md',

@@ -14,3 +14,4 @@ data/cache/
 .playwright-data/
 test-results/
 playwright-report/
+site/

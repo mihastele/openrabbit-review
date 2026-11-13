@@ -22,6 +22,25 @@ AI review.
 
 See the full [feature guide](docs/features.md).
 
+## Documentation site
+
+The visual field manual is built from `docs/` into `site/` and deployed by the
+GitHub Pages workflow in `.github/workflows/pages.yml`.
+
+- Hosted site: <https://mihastele.github.io/openrabbit-review/>
+- Source pages: [`docs/`](docs/)
+- Local preview:
+
+```bash
+npm ci
+npm run docs:build
+python3 -m http.server 8089 --directory site
+```
+
+Open `http://127.0.0.1:8089`. To publish, enable **Settings → Pages → Build and
+deployment → Source: GitHub Actions**, then push to `main` or run the **Deploy
+documentation** workflow manually.
+
 ## Requirements
 
 - A 64-bit Linux host. Raspberry Pi OS 64-bit on a Pi 4 or Pi 5 is the primary
