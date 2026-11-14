@@ -14,6 +14,11 @@ import {
   resolveActiveProvider,
 } from './llm-provider.js';
 import { LanguageRegistry } from './languages/index.js';
+import {
+  addIgnoredRuleToMemory,
+  addInstructionToMemory,
+  resolveMemoryFilePath,
+} from './repo-memory.js';
 
 export function detectChatCommand(query: string): ChatCommandType {
   const cleaned = query
@@ -21,6 +26,13 @@ export function detectChatCommand(query: string): ChatCommandType {
     .replace(/@coderabbitai\b/gi, '')
     .trim()
     .toLowerCase();
+
+  if (/^ignore\b/.test(cleaned) || /\bignore\s+(?:rule|finding)\b/.test(cleaned)) {
+    return 'ignore';
+  }
+  if (/^remember\b/.test(cleaned) || /\bremember\s+to\b/.test(cleaned)) {
+    return 'remember';
+  }
 
   if (/\b(?:test|tests|unit\s+test|spec|vitest|jest)\b/.test(cleaned)) {
     return 'test';
@@ -68,6 +80,55 @@ export async function handlePRChat(
     return {
       commandDetected,
       replyMarkdown: `✅ **Thread Resolved!** Thanks for addressing this finding. I've marked this review discussion as resolved. 🐇🥕`,
+      providerUsed: active.provider,
+      modelUsed: active.model,
+    };
+  }
+
+  if (commandDetected === 'ignore') {
+    const rawArg = req.query
+      .replace(/@openrabbit\b/gi, '')
+      .replace(/@coderabbitai\b/gi, '')
+      .replace(/^\s*ignore\s+(?:rule|finding)?\s*/i, '')
+      .trim();
+    const ruleId = rawArg || req.findingContext?.ruleMatched || req.findingContext?.id || '';
+    if (!ruleId) {
+      return {
+        commandDetected,
+        replyMarkdown: `Please specify a rule ID to ignore, e.g. \`@openrabbit ignore semgrep/ts.sqli\`.`,
+        providerUsed: active.provider,
+        modelUsed: active.model,
+      };
+    }
+    const memPath = resolveMemoryFilePath(req.repoPath, req.memoryFilePath);
+    addIgnoredRuleToMemory(memPath, ruleId);
+    return {
+      commandDetected,
+      replyMarkdown: `🔇 **Rule Suppressed:** \`${ruleId}\` has been added to repository memory (\`.openrabbit-memory.json\`) and will be skipped in future reviews.`,
+      providerUsed: active.provider,
+      modelUsed: active.model,
+    };
+  }
+
+  if (commandDetected === 'remember') {
+    const instruction = req.query
+      .replace(/@openrabbit\b/gi, '')
+      .replace(/@coderabbitai\b/gi, '')
+      .replace(/^\s*remember\s*(?:that|to)?\s*/i, '')
+      .trim();
+    if (!instruction) {
+      return {
+        commandDetected,
+        replyMarkdown: `Please provide a guideline to remember, e.g. \`@openrabbit remember always validate tenant_id in SQL queries\`.`,
+        providerUsed: active.provider,
+        modelUsed: active.model,
+      };
+    }
+    const memPath = resolveMemoryFilePath(req.repoPath, req.memoryFilePath);
+    addInstructionToMemory(memPath, instruction);
+    return {
+      commandDetected,
+      replyMarkdown: `🧠 **Guideline Remembered:** "${instruction}" has been saved to repository memory (\`.openrabbit-memory.json\`) for future reviews.`,
       providerUsed: active.provider,
       modelUsed: active.model,
     };

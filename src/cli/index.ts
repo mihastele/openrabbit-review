@@ -17,7 +17,9 @@ import {
 } from '../core/git-utils.js';
 import { getProvidersStatus } from '../core/llm-provider.js';
 import { renderEffortBar } from '../core/markdown-formatter.js';
+import { exceedsFailureThreshold, formatSarifReport, type FailureThreshold } from '../core/sarif-formatter.js';
 import { runPullRequestReview } from '../core/review-engine.js';
+import { buildRepositorySecurityDiff } from '../core/repository-security-scan.js';
 import {
   getAllBuiltinRulesCatalog,
   loadRulesFromFile,
@@ -29,6 +31,10 @@ import {
   runGitHubOnDemandReview,
   upsertGitHubWalkthroughComment,
 } from '../integrations/github.js';
+import {
+  parseForgejoTarget,
+  runForgejoOnDemandReview,
+} from '../integrations/forgejo.js';
 import { runGitLabOnDemandReview } from '../integrations/gitlab.js';
 import { createOpenRabbitServer } from '../server/app.js';
 import {
@@ -460,7 +466,34 @@ async function runCli(): Promise<void> {
 
   if (command === 'review') {
     const format = String(flags.format || 'terminal');
-    if (format === 'terminal') printBanner();
+    if (flags['security-scan'] && ['file', 'commit', 'range', 'staged', 'base', 'demo', 'github', 'github-url', 'gitlab', 'gitlab-url', 'bitbucket', 'bitbucket-url', 'post-github', 'post-comment'].some((key) => flags[key])) {
+      throw new Error('--security-scan cannot be combined with another review target.');
+    }
+    if (!['terminal', 'markdown', 'json', 'sarif'].includes(format)) {
+      throw new Error('Invalid --format. Use terminal, markdown, json, or sarif.');
+    }
+    const failOn = flags['fail-on'] ?? 'none';
+    if (typeof failOn !== 'string' || !['none', 'critical', 'warning', 'suggestion', 'nitpick'].includes(failOn)) {
+      throw new Error('Invalid --fail-on. Use none, critical, warning, suggestion, or nitpick.');
+    }
+    if (flags.output !== undefined && typeof flags.output !== 'string') {
+      throw new Error('--output requires a file path.');
+    }
+    if (format === 'terminal' && !flags.output) printBanner();
+    const emitReview = (result: ReviewResult) => {
+      const output = format === 'sarif' ? JSON.stringify(formatSarifReport(result), null, 2)
+        : format === 'json' ? JSON.stringify(result, null, 2)
+        : format === 'markdown' ? result.markdownWalkthrough : renderTerminalReview(result);
+      if (typeof flags.output === 'string') {
+        fs.writeFileSync(path.resolve(flags.output), output + '\n', 'utf8');
+      } else {
+        console.log(output);
+      }
+      // Emit the report before setting the status so CI can still upload it.
+      if (exceedsFailureThreshold(result.findings, failOn as FailureThreshold)) {
+        process.exitCode = 1;
+      }
+    };
 
     const store = new ReviewStore();
     await store.init();
@@ -548,18 +581,34 @@ async function runCli(): Promise<void> {
           config,
         });
         await store.addReview(ghResult);
-        if (format === 'json') {
-          console.log(JSON.stringify(ghResult, null, 2));
-        } else if (format === 'markdown') {
-          console.log(ghResult.markdownWalkthrough);
-        } else {
-          console.log(renderTerminalReview(ghResult));
-        }
+        emitReview(ghResult);
         return;
       }
     }
 
-    // 2. Live GitLab on-demand review
+    // 2. Live Codeberg / Forgejo on-demand review
+    const forgejoInput = flags.forgejo || flags.codeberg;
+    if (typeof forgejoInput === 'string') {
+      const target = parseForgejoTarget(forgejoInput);
+      if (!target) {
+        throw new Error(
+          'Invalid Codeberg target. Use owner/repo#123 or https://codeberg.org/owner/repo/pulls/123.'
+        );
+      }
+      const forgejoResult = await runForgejoOnDemandReview({
+        owner: target.owner,
+        repo: target.repo,
+        pullNumber: target.pullNumber,
+        token: process.env.FORGEJO_TOKEN,
+        postComment: Boolean(flags['post-comment']),
+        config,
+      });
+      await store.addReview(forgejoResult);
+      emitReview(forgejoResult);
+      return;
+    }
+
+    // 3. Live GitLab on-demand review
     const glInput = flags.gitlab || flags['gitlab-url'];
     if (typeof glInput === 'string') {
       let projectId: string | number = '';
@@ -594,13 +643,7 @@ async function runCli(): Promise<void> {
           config,
         });
         await store.addReview(glResult);
-        if (format === 'json') {
-          console.log(JSON.stringify(glResult, null, 2));
-        } else if (format === 'markdown') {
-          console.log(glResult.markdownWalkthrough);
-        } else {
-          console.log(renderTerminalReview(glResult));
-        }
+        emitReview(glResult);
         return;
       }
     }
@@ -640,23 +683,27 @@ async function runCli(): Promise<void> {
           config,
         });
         await store.addReview(bbResult);
-        if (format === 'json') {
-          console.log(JSON.stringify(bbResult, null, 2));
-        } else if (format === 'markdown') {
-          console.log(bbResult.markdownWalkthrough);
-        } else {
-          console.log(renderTerminalReview(bbResult));
-        }
+        emitReview(bbResult);
         return;
       }
     }
 
     let rawDiff = '';
+    let securityScanScope: { skippedFiles: number } | undefined;
     let prTitle = String(flags.title || 'Local Pull Request Review');
     let repository = String(flags.repo || 'local/openrabbit');
     let commitSha: string | undefined = undefined;
 
-    if (flags.file && typeof flags.file === 'string') {
+    if (flags['security-scan']) {
+      if (config.static_analysis?.enabled === false) throw new Error('Enable static analysis to run a repository security scan.');
+      const scan = buildRepositorySecurityDiff(targetRepoPath, config.reviews.path_filters);
+      rawDiff = scan.diff;
+      securityScanScope = { skippedFiles: scan.skippedFiles };
+      config.profile = 'security-focused';
+      config.reviewer = 'static-only';
+      prTitle = 'Repository security scan';
+      repository = getRepoMetadata(targetRepoPath).name;
+    } else if (flags.file && typeof flags.file === 'string') {
       rawDiff = fs.readFileSync(path.resolve(flags.file), 'utf8');
       prTitle = `Patch Review: ${path.basename(flags.file)}`;
     } else if (flags.commit && typeof flags.commit === 'string') {
@@ -684,6 +731,7 @@ async function runCli(): Promise<void> {
     } else {
       const localGit = getLocalGitDiff({
         cwd: targetRepoPath,
+        strict: true,
         staged: Boolean(flags.staged),
         baseBranch: typeof flags.base === 'string' ? flags.base : undefined,
       });
@@ -693,11 +741,10 @@ async function runCli(): Promise<void> {
         repository = localGit.repoName;
         commitSha = localGit.commitSha;
       } else {
-        // Fallback to demo template 1 if repo has no uncommitted changes yet
-        const tpl = SAMPLE_DIFF_TEMPLATES[0];
-        rawDiff = tpl.diff;
-        prTitle = `${tpl.prTitle} (Demo PR — no local uncommitted changes detected)`;
-        repository = tpl.repository;
+        rawDiff = '';
+        prTitle = `Local Review: ${localGit.description}`;
+        repository = localGit.repoName;
+        commitSha = localGit.commitSha;
       }
     }
 
@@ -709,6 +756,7 @@ async function runCli(): Promise<void> {
       commitSha,
       source: 'cli',
       config,
+      securityScanScope,
     });
 
     await store.addReview(result);
@@ -733,22 +781,17 @@ async function runCli(): Promise<void> {
             prNum,
             result.commitSha,
             result.findings,
-            process.env.GITHUB_TOKEN
+            process.env.GITHUB_TOKEN,
+            { rawDiff }
           );
         }
-        console.log(
+        console.error(
           `${ANSI.green}✔ Posted walkthrough & inline comments to GitHub PR ${flags['post-github']}${ANSI.reset}`
         );
       }
     }
 
-    if (format === 'json') {
-      console.log(JSON.stringify(result, null, 2));
-    } else if (format === 'markdown') {
-      console.log(result.markdownWalkthrough);
-    } else {
-      console.log(renderTerminalReview(result));
-    }
+    emitReview(result);
     return;
   }
 
@@ -795,15 +838,20 @@ async function runCli(): Promise<void> {
     ${ANSI.dim}--commit <sha>${ANSI.reset}                 Review a specific commit in the repository
     ${ANSI.dim}--range <from..to>${ANSI.reset}             Review a commit range (e.g. main..feat/auth)
     ${ANSI.dim}--staged${ANSI.reset}                        Review staged git changes
+    ${ANSI.dim}--security-scan${ANSI.reset}                 Scan tracked working-tree text files with offline security rules
     ${ANSI.dim}--base <branch>${ANSI.reset}                 Review branch diff against base (e.g. main)
     ${ANSI.dim}--file <patch>${ANSI.reset}                  Review a specific .diff / .patch file
     ${ANSI.dim}--demo [id]${ANSI.reset}                     Run against a sample PR diff (auth-jwt-sqli | react-billing-hook | clean-stream-worker)
     ${ANSI.dim}--github <owner/repo#pr>${ANSI.reset}       Review a live GitHub Pull Request or commit
+    ${ANSI.dim}--forgejo <owner/repo#pr>${ANSI.reset}      Review a live Codeberg/Forgejo Pull Request
+    ${ANSI.dim}--codeberg <owner/repo#pr>${ANSI.reset}     Alias for --forgejo
     ${ANSI.dim}--gitlab <project#mr>${ANSI.reset}          Review a live GitLab Merge Request or commit
     ${ANSI.dim}--bitbucket <workspace/repo#pr>${ANSI.reset} Review a live Bitbucket Pull Request or commit
     ${ANSI.dim}--profile <mode>${ANSI.reset}                Override profile (chill | assertive | security-focused)
     ${ANSI.dim}--provider <llm>${ANSI.reset}                Override LLM (auto | openai | anthropic | gemini | ollama | heuristic)
-    ${ANSI.dim}--format <fmt>${ANSI.reset}                  Output format (terminal | markdown | json)
+    ${ANSI.dim}--format <fmt>${ANSI.reset}                  Output format (terminal | markdown | json | sarif)
+    ${ANSI.dim}--output <path>${ANSI.reset}                 Write report to a UTF-8 file
+    ${ANSI.dim}--fail-on <severity>${ANSI.reset}            Exit 1 at threshold or above (critical | warning | suggestion | nitpick; default: none)
 
   ${ANSI.cyan}openrabbit repo list${ANSI.reset}                 List registered local repositories
   ${ANSI.cyan}openrabbit repo add <path>${ANSI.reset}           Add a repository from local file system

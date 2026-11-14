@@ -1,207 +1,312 @@
 # 🐇 OpenRabbit
 
-**Open-Source AI Pull Request Reviewer, Walkthrough Generator & Interactive PR Companion**  
-*An open-source, self-hostable, multi-provider BYOK alternative to CodeRabbit.*
+**Self-hosted AI pull request review, security scanning, and `@openrabbit` PR chat.**
 
----
+OpenRabbit is an open-source, multi-provider, BYOK alternative to hosted review
+bots. It runs on your own machine — including a Raspberry Pi — and works with no
+LLM key using its built-in static/AST engine. Add an API key when you want deeper
+AI review.
 
-## ✨ Why OpenRabbit?
+- Sticky PR walkthroughs with summaries, file tables, Mermaid diagrams, effort,
+  risk, release notes, and an optional rabbit poem
+- Inline findings with committable suggestions
+- `@openrabbit explain`, `test`, `fix`, `docstring`, `ignore`, `remember`, and
+  `resolve` commands
+- Automatic reviews on PR updates, with duplicate webhook delivery protection
+- Profiles, path filters, path instructions, custom rules, and repository memory
+- GitHub, Codeberg/Forgejo, GitLab, and Bitbucket integrations
+- Built-in heuristic checks plus optional Semgrep, Trivy, and Gitleaks
+- SARIF, JSON, and Markdown reports with CI severity gates
+- Local repository, commit, and working-tree reviews
+- One authenticated dashboard for reviews, provider setup, jobs, rules, and history
 
-Code reviews shouldn't require surrendering your proprietary source code to a closed SaaS or paying per-seat enterprise fees. **OpenRabbit** brings the signature capabilities developers love about CodeRabbit into a fast, transparent, open-source platform:
+See the full [feature guide](docs/features.md).
 
-1. **🧭 Two-Stage PR Walkthroughs**:
-   - Executive Summary & Release Notes grouped by module
-   - File-by-File Walkthrough Table with component detection & impact badges (`🟢 Low`, `🟡 Med`, `🔴 High`)
-   - Auto-generated **Mermaid Sequence Diagrams** (`sequenceDiagram`) visualizing how PR changes interact at runtime
-   - **Review Effort Score** (`1/5` to `5/5`) & Risk Assessment
-   - Configurable **Rabbit Poem** summarizing every PR 🐇🥕
-   - Updates a single sticky comment (`<!-- openrabbit-walkthrough -->`) on new commits instead of spamming your PR!
-2. **📝 Line-by-Line Inline Code Reviews with One-Click Committable Suggestions**:
-   - Pinpoints exact diff lines and emits GitHub (` ```suggestion `) and GitLab (` ```suggestion:-0+0 `) committable code blocks.
-   - Combines a built-in deterministic **Static + AST Security/Concurrency Analyzer** with **Multi-Provider LLMs**.
-3. **🌐 Modular Multi-Language Architecture (Strategy & Factory Patterns)**:
-   - Built on a decoupled **Strategy Pattern** (`ILanguageStrategy`) and **Registry Pattern** (`LanguageRegistry`), isolating all language-specific rules, symbol extraction, test scaffolding, and documentation generators into independent classes:
-     - **C# / .NET** (`.cs`): Detects Entity Framework `FromSqlRaw` / `ExecuteSqlRaw` SQL injection, process-crashing `async void` methods, and thread-pool deadlocks from sync-over-async (`.Result` / `.Wait()`). Generates xUnit `[Fact]` test suites and XML doc comments.
-     - **C++** (`.cpp`, `.cc`, `.cxx`, `.hpp`): Flags unbounded buffer functions (`sprintf`, `strcpy`), raw `new` allocations lacking RAII (`std::make_unique`), and polymorphic object slicing in catch-by-value (`catch (std::exception e)`). Generates GoogleTest (`TEST_F`) suites and Doxygen.
-     - **C** (`.c`, `.h`): Catches unchecked dynamic allocation (`malloc` without NULL check) and unbounded string functions (`strcpy`, `strcat`, `gets`). Generates Unity/CUnit test runners and Doxygen comments.
-     - **Java / Kotlin** (`.java`, `.kt`): Detects JDBC/JPA raw query concatenation, unclosed `AutoCloseable` streams without try-with-resources, and unsafe `Optional.get()`. Generates JUnit 5 test classes and Javadoc.
-     - **PHP** (`.php`): Identifies PDO/MySQLi raw query SQL injection, unescaped superglobal output (Reflected XSS via `$_GET`/`$_POST`), and unescaped `exec()` / `shell_exec()`. Generates PHPUnit test suites and PHPDoc.
-     - **Ruby** (`.rb`, `.rake`): Flags ActiveRecord string interpolation SQL injection (`where("tenant = '#{name}'")`), insecure deserialization (`YAML.load` vs `YAML.safe_load`), and unescaped command execution. Generates RSpec (`RSpec.describe`) specs and YARD docs.
-     - **TypeScript / JavaScript** (`.ts`, `.tsx`, `.js`, `.jsx`): Flags async `.forEach()` race conditions, loose equality `==`, uncleaned event/timer leaks, and React hook dependencies. Generates Vitest/Jest suites and TSDoc.
-     - **Python** (`.py`): Catches mutable default args (`def f(x=[])`), raw f-string SQL injection, `shell=True` subprocesses, and bare `except:`. Generates `pytest` test suites with `@pytest.mark.asyncio` and PEP-257 docstrings.
-     - **Go** (`.go`): Detects missing `defer resp.Body.Close()`, `fmt.Sprintf` SQL queries, and unhandled errors (`_ = ...`). Generates table-driven `go test` suites.
-     - **Rust** (`.rs`): Flags unhandled production `.unwrap()` calls (suggesting `?` or `.unwrap_or_default()`) and unannotated `unsafe` blocks. Generates `cargo test` suites and Rustdoc.
-     - **Shell / Bash** (`.sh`, `.bash`): Enforces `set -euo pipefail` strict mode and flags unquoted expansions.
-4. **💬 Interactive `@openrabbit` PR Chat & Commands**:
-   - Reply in any PR or inline review thread with:
-     - `@openrabbit explain` — Deep-dive explanation of the hunk & execution flow
-     - `@openrabbit test` — Generates language-idiomatic unit tests (`pytest`, `go test`, `cargo test`, `JUnit 5`, `xUnit`, `GoogleTest`, `PHPUnit`, `RSpec`, `Vitest`)
-     - `@openrabbit fix` — Produces a committable replacement patch matching language idioms
-     - `@openrabbit docstring` — Generates language-standard docstrings (PEP-257, Javadoc, XML Doc, Doxygen, PHPDoc, YARD, TSDoc)
-     - `@openrabbit resolve` — Marks the review discussion resolved
-5. **🔑 Multi-Provider BYOK + 100% Private Local Mode**:
-   - **OpenAI** (`gpt-4o`, `o3-mini`, or any compatible endpoint like Groq, DeepSeek, OpenRouter)
-   - **Anthropic Claude** (`claude-3-7-sonnet-latest`)
-   - **Google Gemini** (`gemini-2.5-pro`, `gemini-2.5-flash`)
-   - **Ollama** (`qwen2.5-coder`, `deepseek-r1`, `llama3.3` for 100% air-gapped private reviews)
-   - **Built-in Static/AST Heuristic Engine** (works immediately with zero API keys!)
-6. **⚙️ Drop-in `.openrabbit.yaml` & `.coderabbit.yaml` Compatibility**:
-   - Supports `profile: chill | assertive | security-focused`, glob `path_filters`, and per-directory `path_instructions`.
+## Documentation site
 
----
+The visual field manual is built from `docs/` into `site/` and deployed by the
+GitHub Pages workflow in `.github/workflows/pages.yml`.
 
-## 🏗️ Architecture & Design Patterns
-
-OpenRabbit is engineered with clear separation of concerns using classic GoF design patterns:
-
-- **Strategy Pattern (`ILanguageStrategy`)**: Each programming language implements a standardized strategy defining file extension bindings, symbol extractors, deterministic static AST rules, quick fix generators, and test/doc scaffolds.
-- **Factory / Registry Pattern (`LanguageRegistry`)**: Central singleton registry providing $O(1)$ strategy lookup and file routing. Adding support for a new language requires only implementing `ILanguageStrategy` and registering it—zero core engine modifications needed!
-
-```mermaid
-flowchart TD
-  subgraph Ingestion["Input & Ingestion"]
-    DIFF["Unified Git Diff / Staged Changes"]
-    CMD["@openrabbit Chat Command"]
-  end
-
-  subgraph Registry["Language Strategy Registry (Factory/Strategy)"]
-    REG["LanguageRegistry.getStrategyForFile()"]
-    CS["CSharpStrategy (.cs)"]
-    CPP["CppStrategy (.cpp, .hpp)"]
-    C["CStrategy (.c, .h)"]
-    JAVA["JavaStrategy (.java, .kt)"]
-    PHP["PhpStrategy (.php)"]
-    RUBY["RubyStrategy (.rb)"]
-    TS["TypeScriptStrategy (.ts, .js)"]
-    PY["PythonStrategy (.py)"]
-    GO["GoStrategy (.go)"]
-    RS["RustStrategy (.rs)"]
-    SH["ShellStrategy (.sh)"]
-  end
-
-  subgraph Execution["Core Review & Chat Engines"]
-    PARSER["DiffParser (Symbols & Hunks)"]
-    HEURISTIC["HeuristicAnalyzer (Strategy Rules)"]
-    LLM_ROUTER["Multi-Provider LLM Router (BYOK)"]
-    CHAT_ENGINE["PR Chat Engine (Tests/Docs/Fixes)"]
-  end
-
-  subgraph Delivery["Delivery Outputs"]
-    WALKTHROUGH["Sticky Walkthrough + Mermaid Diagram"]
-    INLINE["Committable Suggestions (GitHub / GitLab)"]
-    DASHBOARD["Interactive Web Studio & Analytics"]
-  end
-
-  DIFF --> PARSER
-  PARSER --> REG
-  REG --> CS & CPP & C & JAVA & PHP & RUBY & TS & PY & GO & RS & SH
-  REG --> HEURISTIC
-  REG --> LLM_ROUTER
-  CMD --> CHAT_ENGINE
-  CHAT_ENGINE --> REG
-
-  HEURISTIC --> WALKTHROUGH & INLINE
-  LLM_ROUTER --> WALKTHROUGH & INLINE
-  WALKTHROUGH & INLINE --> DASHBOARD
-```
-
----
-
-## 🚀 Quickstart
-
-### 1. Run a Terminal PR Review (`openrabbit review`)
+- Hosted site: <https://mihastele.github.io/openrabbit-review/>
+- Source pages: [`docs/`](docs/)
+- Local preview:
 
 ```bash
-# Install dependencies & build
-npm install
+npm ci
+npm run docs:build
+python3 -m http.server 8089 --directory site
+```
+
+Open `http://127.0.0.1:8089`. To publish, enable **Settings → Pages → Build and
+deployment → Source: GitHub Actions**, then push to `main` or run the **Deploy
+documentation** workflow manually.
+
+## Requirements
+
+- A 64-bit Linux host. Raspberry Pi OS 64-bit on a Pi 4 or Pi 5 is the primary
+  supported Pi target. 32-bit ARM is not supported.
+- Docker Engine with Compose v2.
+- 4 GB RAM recommended for the default `lite` image. Semgrep/Trivy need more.
+- Optional: a domain managed by Cloudflare for a public webhook URL without
+  router port forwarding.
+- Optional: an OpenAI-compatible, Anthropic, Gemini, or Ollama endpoint.
+
+## Quickstart on a Raspberry Pi
+
+```bash
+git clone https://github.com/mihastele/openrabbit-review.git openrabbit
+cd openrabbit
+./scripts/setup-pi.sh
+curl -fsS http://127.0.0.1:3847/healthz
+```
+
+Expected health response:
+
+```json
+{"ok":true}
+```
+
+`setup-pi.sh` checks Docker and the CPU architecture, creates a private `.env`
+with generated admin and webhook secrets, fixes the data-directory owner, builds
+the ARM64 image, starts the container, and prints the admin token **once**. Save
+that token in your password manager.
+
+The image is bound to `127.0.0.1` by default. From another computer, forward the
+port over SSH instead of exposing it directly:
+
+```bash
+ssh -L 3847:127.0.0.1:3847 <pi-user>@<pi-host>
+```
+
+Open `http://127.0.0.1:3847`, sign in with your admin token, and click
+**Try a demo review**. No LLM key is required for the demo.
+
+For the complete Pi walkthrough, see
+[Hosting on a Raspberry Pi](docs/hosting/raspberry-pi.md).
+
+## Public webhooks with Cloudflare Tunnel
+
+A provider must be able to reach the webhook endpoint over HTTPS. The recommended
+setup is a named Cloudflare Tunnel.
+
+1. In Cloudflare Zero Trust, create a named tunnel and a public hostname such as
+   `review.example.com` pointing to `http://openrabbit:3847`.
+2. Put the tunnel token and public URL in `.env`:
+
+```dotenv
+CLOUDFLARE_TUNNEL_TOKEN=your-tunnel-token
+OPENRABBIT_PUBLIC_URL=https://review.example.com
+```
+
+3. Recreate the app and start the tunnel:
+
+```bash
+docker compose up -d --force-recreate
+docker compose -f docker-compose.yml -f deploy/docker-compose.tunnel.yml up -d
+curl -fsS https://review.example.com/healthz
+```
+
+If you already run Caddy, nginx, or another HTTPS reverse proxy, point it at
+`127.0.0.1:3847` instead and keep the same public URL value. Do not expose the
+dashboard directly without HTTPS.
+
+## Connect GitHub
+
+Add these to `.env`:
+
+```dotenv
+GITHUB_TOKEN=github_pat_...
+GITHUB_WEBHOOK_SECRET=the-secret-generated-by-setup
+OPENRABBIT_PUBLIC_URL=https://review.example.com
+```
+
+Then recreate:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+In the repository: **Settings → Webhooks → Add webhook**.
+
+- Payload URL: `https://review.example.com/api/webhooks/github`
+- Content type: `application/json`
+- Secret: the value of `GITHUB_WEBHOOK_SECRET`
+- Events: **Pull requests**, **Pull request review comments**, **Issue comments**
+
+The dashboard's **Settings → Connections** screen shows the same values and
+marks whether a provider token is configured. Full instructions and token
+permissions are in [GitHub setup](docs/integrations/github.md).
+
+## Connect Codeberg / Forgejo
+
+```dotenv
+FORGEJO_TOKEN=your-codeberg-token
+FORGEJO_WEBHOOK_SECRET=the-secret-generated-by-setup
+FORGEJO_WEB_URL=https://codeberg.org
+FORGEJO_API_URL=https://codeberg.org/api/v1
+OPENRABBIT_PUBLIC_URL=https://review.example.com
+```
+
+Create a **Forgejo** webhook in the repository with:
+
+- Payload URL: `https://review.example.com/api/webhooks/forgejo`
+- Content type: `application/json`
+- Secret: `FORGEJO_WEBHOOK_SECRET`
+- Events: pull requests and pull request comments
+
+For self-hosted Forgejo or compatible Gitea instances, change
+`FORGEJO_WEB_URL` and `FORGEJO_API_URL`. See
+[Codeberg / Forgejo setup](docs/integrations/codeberg.md).
+
+GitLab and Bitbucket are supported too: [GitLab](docs/integrations/gitlab.md)
+and [Bitbucket](docs/integrations/bitbucket.md).
+
+## Choose a review engine
+
+The default is `auto`, with a deterministic fallback to the built-in engine if
+no LLM key is available.
+
+```dotenv
+# No key: static/AST review works immediately
+OPENRABBIT_LLM_PROVIDER=heuristic
+
+# Or configure one provider
+OPENRABBIT_LLM_PROVIDER=openai
+OPENAI_API_KEY=...
+```
+
+Supported providers are OpenAI-compatible endpoints, Anthropic, Gemini, Ollama,
+and the built-in heuristic engine. When an external provider is used, the selected
+diff and related source context are sent to that provider according to its terms.
+For an air-gapped deployment, use `heuristic` or a local Ollama instance.
+
+### Optional full scanner image
+
+The default `lite` image includes the built-in engine and Git. The optional
+`full` image adds Semgrep, Trivy, and Gitleaks:
+
+```dotenv
+OPENRABBIT_DOCKER_TARGET=full
+```
+
+```bash
+docker compose up -d --build --force-recreate
+```
+
+Scanner availability is shown on each review. A missing scanner is reported as
+skipped; it is never silently counted as a successful scan. See
+[Security and data](docs/security.md).
+
+## Using the dashboard
+
+- **Home** — server, AI, and provider status; recent reviews; demo and setup actions
+- **Review** — paste a GitHub/Codeberg/GitLab/Bitbucket PR URL, or open advanced
+  controls for a diff, local repository, commit, or working-tree review
+- **Activity** — background webhook jobs, review history, findings, and analytics
+- **Settings** — Connections, local repositories, review profiles, rules, and YAML
+
+Background provider reviews return quickly and run through the job queue. If a
+job fails, Activity shows the provider, PR, attempt count, and error. Common fixes
+are provider token permissions, a missing webhook secret, repository access, or
+an unavailable LLM endpoint.
+
+## CLI quick start
+
+```bash
+npm ci
 npm run build
 
-# Review curated multi-language demos across all supported ecosystems:
-npm run review -- --demo csharp-aspnet-sqli    # C# (.NET Entity Framework SQLi & async void)
-npm run review -- --demo cpp-engine-buffer      # C++ (Unsafe sprintf, raw new, catch-by-value)
-npm run review -- --demo c-crypto-buffer        # C (Unchecked malloc & strcpy)
-npm run review -- --demo java-spring-sqli       # Java (JDBC SQLi & unclosed streams)
-npm run review -- --demo php-laravel-sqli       # PHP (PDO SQLi, XSS echo, exec injection)
-npm run review -- --demo ruby-rails-sqli        # Ruby (ActiveRecord SQLi, YAML.load RCE)
-npm run review -- --demo python-fastapi-sqli    # Python (Mutable defaults, SQLi, shell=True)
-npm run review -- --demo go-microservice-leak   # Go (Missing defer Body.Close, fmt.Sprintf SQL)
-npm run review -- --demo rust-systems-unwrap    # Rust (Production unwrap() panics)
-npm run review -- --demo auth-jwt-sqli          # TypeScript (JWT secret leak, SQLi, async forEach)
+# Review staged changes in the current repository
+npx openrabbit review --staged
 
-# Review your own staged git changes across any repository
-npx tsx src/cli/index.ts review --staged
+# Review a commit or range
+npx openrabbit review --repo-path /path/to/repo --commit <sha>
+npx openrabbit review --repo-path /path/to/repo --range HEAD~3..HEAD
 
-# Review a specific local repository and commit on your filesystem
-npx openrabbit repo add /path/to/my-repo
-npx openrabbit repo commits /path/to/my-repo
-npx openrabbit review --repo-path /path/to/my-repo --commit <sha>
-npx openrabbit review --repo-path /path/to/my-repo --range HEAD~3..HEAD
-
-# Review live remote PRs on demand (GitHub, GitLab, Bitbucket)
+# Review a live PR
 npx openrabbit review --github owner/repo#123
-npx openrabbit review --gitlab project/id#45
+npx openrabbit review --codeberg owner/repo#123
+npx openrabbit review --gitlab group/project#45
 npx openrabbit review --bitbucket workspace/repo#78
 
-# Ask @openrabbit to generate language-specific unit tests or fixes
-npx tsx src/cli/index.ts chat "@openrabbit generate unit tests"
-npx tsx src/cli/index.ts chat "@openrabbit fix this vulnerability"
+# Interactive commands
+npx openrabbit chat "@openrabbit explain"
+npx openrabbit chat "@openrabbit generate unit tests"
 ```
 
-### 2. Launch the Interactive Web Dashboard & Webhook Server (`openrabbit serve`)
+### Security reviews and CI
 
 ```bash
-npm run dev
+npx openrabbit review \
+  --base origin/main \
+  --profile security-focused \
+  --provider heuristic \
+  --format sarif \
+  --output openrabbit.sarif \
+  --fail-on warning
 ```
 
-Then open **`http://localhost:3847`** to explore:
-- **🔎 PR Review Studio**: Paste any `git diff` or select directly from registered local repositories and commits, inspect the rendered **Mermaid Sequence Diagram**, click **✨ Apply Fix to Diff & Re-Verify** on committable suggestions, and chat with `@openrabbit` inline!
-- **📁 Local Repos & Commits**: Connect any git repository on your filesystem, explore commit history with author and file diff stats, and trigger instant one-click reviews for any commit or uncommitted working tree changes.
-- **📊 Reviews & Analytics**: Track PRs reviewed, critical vulnerabilities caught, and engineering hours saved.
-- **⚙️ `.openrabbit.yaml` Studio**: Visually configure `chill` vs `assertive` profiles, `path_instructions`, and BYOK LLM providers.
-- **🔌 Webhooks & Integrations**:
-  - **Live On-Demand Review**: Enter any remote PR URL or identifier for GitHub, GitLab, or Bitbucket to review it directly.
-  - **Webhook Simulator**: Test GitHub (`pull_request`, `issue_comment`), GitLab (`Merge Request Hook`), and Bitbucket (`pullrequest:created`, `pullrequest:comment_created`) webhooks with one click.
+`--fail-on` accepts `none`, `critical`, `warning`, `suggestion`, or `nitpick`.
+The report is written before the exit code is set, so CI can upload it even when
+the gate fails. Findings are candidates for human review; an empty result does
+not prove a repository is secure.
 
----
+## Configuration
 
-## ⚙️ Configuration (`.openrabbit.yaml`)
+OpenRabbit reads `.openrabbit.yaml`, `.openrabbit.yml`, `.coderabbit.yaml`, or
+`.coderabbit.yml`:
 
 ```yaml
-language: en-US
 profile: chill # chill | assertive | security-focused
-tone_instructions: Be constructive, concise, and high-signal.
 reviews:
   high_level_summary: true
   poem: true
   sequence_diagrams: true
-  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches: [main, master, develop]
   path_filters:
     - "!dist/**"
     - "!*.lock"
   path_instructions:
     - path: "src/api/**"
-      instructions: "Verify authentication checks, input validation, and parameterized SQL queries."
-    - path: "**/*.tsx"
-      instructions: "Check for React hook dependency bugs and memory leaks."
+      instructions: "Check authorization, validation, rate limits, and parameterized SQL."
 chat:
   auto_reply: true
 llm:
-  provider: auto # auto | openai | anthropic | gemini | ollama | heuristic
+  provider: auto
   temperature: 0.2
 ```
 
----
+See [Configuration](docs/configuration.md) and [Features](docs/features.md).
 
-## 🧪 Running Tests & Building
+## Operations and security
+
+- Back up `data/` and `.env`; both may contain source-derived review data and secrets.
+- Keep one container writer per `data/` directory.
+- Rotate provider tokens and webhook secrets by editing `.env` and recreating containers.
+- Keep the dashboard on `127.0.0.1` behind SSH, a tunnel, or an authenticated
+  reverse proxy. Public deployments must use HTTPS.
+- Provider webhooks require valid signatures/secrets in production.
+
+Read [Operations](docs/operations.md),
+[Security and data](docs/security.md), and
+[Troubleshooting](docs/troubleshooting.md).
+
+## Development
 
 ```bash
-# Run the automated unit & webhook integration test suite
+npm ci
 npm test
-
-# Compile TypeScript to dist/
 npm run build
+npm run test:ui
 ```
 
-## 📄 License
+The test suite covers review behavior, webhook signatures and routes, job
+deduplication, authentication, remote checkout safety, deployment contracts,
+documentation contracts, and four browser flows.
+
+## License
 
 MIT

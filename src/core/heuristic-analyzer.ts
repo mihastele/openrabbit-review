@@ -8,7 +8,17 @@ import type {
   ReviewCategory,
   ReviewSeverity,
 } from '../types/index.js';
-import { inferComponentName } from './diff-parser.js';
+import { inferComponentName, isNonCodeFilePath } from './diff-parser.js';
+import { sanitizeSuggestionCode } from './suggestion-validator.js';
+
+/** Maximum symbols named inline in a summary before collapsing to "+N more". */
+const MAX_INLINE_SYMBOLS = 5;
+
+function formatSymbolList(symbols: string[]): string {
+  const shown = symbols.slice(0, MAX_INLINE_SYMBOLS).map((s) => `\`${s}\``);
+  const extra = symbols.length - shown.length;
+  return extra > 0 ? `${shown.join(', ')} (+${extra} more)` : shown.join(', ');
+}
 import { LanguageRegistry, type LanguageRule } from './languages/index.js';
 import {
   GLOBAL_SECURITY_RULES,
@@ -91,7 +101,10 @@ export function runHeuristicInlineReview(
                 category: rule.category,
                 title: rule.title,
                 body: details.body,
-                suggestionCode: details.suggestionCode,
+                suggestionCode: sanitizeSuggestionCode(
+                  details.suggestionCode,
+                  line.content
+                ),
                 originalCode: line.content,
                 ruleMatched: rule.id,
               });
@@ -119,7 +132,7 @@ export function runHeuristicInlineReview(
   }
 
   // If a PR has clean additions and no issues were flagged, add a constructive architectural observation or praise
-  if (findings.length === 0 && files.length > 0) {
+  if (findings.length === 0 && files.length > 0 && config.profile !== 'security-focused') {
     const primaryFile = files.find((f) => f.hunks.length > 0) || files[0];
     const firstHunk = primaryFile.hunks[0];
     const firstAdd = firstHunk?.lines.find((l) => l.type === 'add');
@@ -135,7 +148,7 @@ export function runHeuristicInlineReview(
       title: 'Clean, well-structured implementation with no high-risk anti-patterns',
       body: `Reviewed **+${primaryFile.additions}/-${primaryFile.deletions}** lines in \`${primaryFile.newPath}\`${
         primaryFile.symbolsChanged.length > 0
-          ? ` affecting ${primaryFile.symbolsChanged.map((s) => `\`${s}\``).join(', ')}`
+          ? ` affecting ${formatSymbolList(primaryFile.symbolsChanged)}`
           : ''
       }. No security vulnerabilities, unhandled errors, or unsafe resource leaks were detected.`,
     });
@@ -164,17 +177,22 @@ export function buildHeuristicWalkthrough(
     const impact: 'low' | 'medium' | 'high' =
       hasCritical || churn > 80 ? 'high' : hasWarning || churn > 25 ? 'medium' : 'low';
 
+    const nonCode = isNonCodeFilePath(file.newPath);
     let summary = '';
     if (file.status === 'added') {
-      summary = `Introduces new ${file.language} module${
-        file.symbolsChanged.length > 0
-          ? ` defining ${file.symbolsChanged.map((s) => `\`${s}\``).join(', ')}`
-          : ''
-      } (+${file.additions} lines).`;
+      summary = nonCode
+        ? `Adds new ${file.language} file \`${file.newPath}\` (+${file.additions} lines).`
+        : `Introduces new ${file.language} module${
+            file.symbolsChanged.length > 0
+              ? ` defining ${formatSymbolList(file.symbolsChanged)}`
+              : ''
+          } (+${file.additions} lines).`;
     } else if (file.status === 'deleted') {
       summary = `Removes legacy ${file.language} file (-${file.deletions} lines).`;
     } else if (file.symbolsChanged.length > 0) {
-      summary = `Updates ${file.symbolsChanged.map((s) => `\`${s}\``).join(', ')} in ${component} (+${file.additions}/-${file.deletions}).`;
+      summary = `Updates ${formatSymbolList(file.symbolsChanged)} in ${component} (+${file.additions}/-${file.deletions}).`;
+    } else if (nonCode) {
+      summary = `Updates ${file.language} content in \`${file.newPath}\` (+${file.additions}/-${file.deletions}).`;
     } else {
       summary = `Refines ${component.toLowerCase()} logic and configuration (+${file.additions}/-${file.deletions} lines).`;
     }

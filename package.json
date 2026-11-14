@@ -12,7 +12,9 @@
     "start": "node dist/cli/index.js serve",
     "review": "tsx src/cli/index.ts review",
     "cli": "tsx src/cli/index.ts",
-    "test": "tsx --test tests/*.test.ts"
+    "docs:build": "node scripts/build-docs-site.mjs",
+    "test": "npm run docs:build && tsx --test tests/*.test.ts",
+    "test:ui": "npm run docs:build && playwright test"
   },
   "keywords": [
     "code-review",
@@ -32,10 +34,13 @@
   "author": "OpenRabbit Contributors",
   "license": "MIT",
   "dependencies": {
+    "mermaid": "^10.9.8",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@types/node": "^22.10.2",
+    "marked": "^18.2.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },

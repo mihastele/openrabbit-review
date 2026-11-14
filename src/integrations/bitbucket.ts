@@ -1,26 +1,65 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import {
   DEFAULT_OPENRABBIT_CONFIG,
   parseYamlConfig,
 } from '../config/config-loader.js';
 import { handlePRChat } from '../core/chat-engine.js';
 import {
+  formatSkippedSummary,
+  prepareInlineComments,
+} from '../core/inline-comments.js';
+import {
   formatInlineCommentMarkdown,
   WALKTHROUGH_COMMENT_MARKER,
 } from '../core/markdown-formatter.js';
 import { runPullRequestReview } from '../core/review-engine.js';
+import {
+  remoteMemoryFilePath,
+  withRemoteWorkspace,
+} from '../core/remote-workspace.js';
 import type {
   InlineFinding,
   OpenRabbitConfig,
   ReviewResult,
 } from '../types/index.js';
 
+function bitbucketGitHost(): string {
+  if (process.env.BITBUCKET_WEB_HOST) return process.env.BITBUCKET_WEB_HOST;
+  try {
+    return new URL(
+      process.env.BITBUCKET_API_URL || 'https://api.bitbucket.org/2.0'
+    ).host.replace(/^api\./, '');
+  } catch {
+    return 'bitbucket.org';
+  }
+}
+
+function dataDir(): string {
+  return process.env.OPENRABBIT_DATA_DIR || path.join(process.cwd(), 'data');
+}
+
+function bitbucketCloneUrl(payload: any): string {
+  for (const repository of [
+    payload?.pullrequest?.source?.repository,
+    payload?.repository,
+  ]) {
+    const links = repository?.links?.clone;
+    if (!Array.isArray(links)) continue;
+    const https = links.find(
+      (link: any) => link?.name === 'https' && typeof link.href === 'string'
+    );
+    if (https) return https.href;
+  }
+  return '';
+}
+
 export function verifyBitbucketWebhook(
   rawBody: string,
   signatureHeader: string | undefined,
   secret: string | undefined
 ): boolean {
-  if (!secret) return true;
+  if (!secret) return process.env.NODE_ENV !== 'production';
   if (!signatureHeader) return false;
 
   const cleanSig = signatureHeader.replace(/^sha256=/, '');
@@ -33,6 +72,47 @@ export function verifyBitbucketWebhook(
   const expBuf = Buffer.from(expected);
   if (sigBuf.length !== expBuf.length) return false;
   return crypto.timingSafeEqual(sigBuf, expBuf);
+}
+
+async function fetchBitbucketPRSource(
+  workspace: string,
+  repoSlug: string,
+  pullRequestId: number,
+  token?: string
+): Promise<{ cloneUrl: string; ref: string; commitSha: string }> {
+  const apiUrl = (
+    process.env.BITBUCKET_API_URL || 'https://api.bitbucket.org/2.0'
+  ).replace(/\/$/, '');
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'User-Agent': 'OpenRabbit-Bot/1.0',
+  };
+  if (token) {
+    headers.Authorization = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+  }
+  const response = await fetch(
+    `${apiUrl}/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}/pullrequests/${pullRequestId}`,
+    { headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to fetch Bitbucket PR (${response.status})`);
+  }
+  const value = (await response.json()) as any;
+  const source = value.source || {};
+  const links = source.repository?.links?.clone;
+  const cloneUrl = Array.isArray(links)
+    ? links.find((link: any) => link?.name === 'https')?.href
+    : undefined;
+  const branch = source.branch?.name;
+  const commitSha = source.commit?.hash;
+  if (typeof cloneUrl !== 'string' || typeof commitSha !== 'string') {
+    throw new Error('Bitbucket PR payload did not include a clone URL and commit');
+  }
+  return {
+    cloneUrl,
+    ref: typeof branch === 'string' ? `refs/heads/${branch}` : commitSha,
+    commitSha,
+  };
 }
 
 export async function fetchBitbucketPRDiff(
@@ -187,31 +267,50 @@ export async function handleBitbucketWebhookEvent(
       );
     }
 
-    const reviewResult = await runPullRequestReview({
-      rawDiff,
-      prTitle,
-      repository: repoFull,
-      prNumber: pullRequestId,
-      author,
-      baseBranch,
-      headBranch,
-      commitSha,
-      source: 'bitbucket',
-      config: fallbackConfig,
-    });
+    const runReview = (repoPath?: string) =>
+      runPullRequestReview({
+        rawDiff,
+        prTitle,
+        repository: repoFull,
+        prNumber: pullRequestId,
+        author,
+        baseBranch,
+        headBranch,
+        commitSha,
+        source: 'bitbucket',
+        config: fallbackConfig,
+        repoPath,
+        memoryFilePath: remoteMemoryFilePath(dataDir(), 'bitbucket', repoFull),
+      });
+
+    const reviewResult = payload.simulated_diff
+      ? await runReview()
+      : await withRemoteWorkspace(
+          {
+            cloneUrl: bitbucketCloneUrl(payload),
+            ref: commitSha,
+            providerHost: bitbucketGitHost(),
+            auth: token ? { username: 'x-token-auth', password: token } : undefined,
+          },
+          (workspace) => runReview(workspace.path)
+        );
 
     let postedToBitbucket = false;
     if (token && !payload.simulated_diff && workspace && repoSlug) {
+      const prepared = prepareInlineComments(reviewResult.findings, rawDiff);
       const combinedComment =
         reviewResult.markdownWalkthrough +
         '\n\n' +
-        reviewResult.findings
+        prepared.comments
           .map(
             (f) =>
               `#### \`${f.file}:${f.startLine}\`\n` +
               formatInlineCommentMarkdown(f, 'github')
           )
-          .join('\n\n---\n\n');
+          .join('\n\n---\n\n') +
+        (prepared.skipped.length > 0
+          ? `\n\n<sub>OpenRabbit skipped ${prepared.skipped.length} inline comment(s)${formatSkippedSummary(prepared.skipped)}.</sub>`
+          : '');
 
       await postBitbucketPRComment(
         workspace,
@@ -293,6 +392,9 @@ export async function runBitbucketOnDemandReview(params: {
   const token = params.token || process.env.BITBUCKET_TOKEN;
   let rawDiff = '';
   let prTitle = `Bitbucket Review: ${params.workspace}/${params.repoSlug}`;
+  let cloneUrl = '';
+  let checkoutRef = '';
+  let reviewCommitSha = params.commitSha;
 
   if (params.pullRequestId) {
     rawDiff = await fetchBitbucketPRDiff(
@@ -301,6 +403,15 @@ export async function runBitbucketOnDemandReview(params: {
       params.pullRequestId,
       token
     );
+    const source = await fetchBitbucketPRSource(
+      params.workspace,
+      params.repoSlug,
+      params.pullRequestId,
+      token
+    );
+    cloneUrl = source.cloneUrl;
+    checkoutRef = source.ref;
+    reviewCommitSha = params.commitSha || source.commitSha;
     prTitle = `Bitbucket PR #${params.pullRequestId}: ${params.workspace}/${params.repoSlug}`;
   } else if (params.commitSha) {
     rawDiff = await fetchBitbucketCommitDiff(
@@ -314,13 +425,29 @@ export async function runBitbucketOnDemandReview(params: {
     throw new Error('Either pullRequestId or commitSha is required');
   }
 
-  return await runPullRequestReview({
-    rawDiff,
-    prTitle,
-    repository: `${params.workspace}/${params.repoSlug}`,
-    prNumber: params.pullRequestId,
-    commitSha: params.commitSha,
-    source: 'bitbucket',
-    config: params.config || DEFAULT_OPENRABBIT_CONFIG,
-  });
+  const repository = `${params.workspace}/${params.repoSlug}`;
+  const runReview = (repoPath?: string) =>
+    runPullRequestReview({
+      rawDiff,
+      prTitle,
+      repository,
+      prNumber: params.pullRequestId,
+      commitSha: reviewCommitSha,
+      source: 'bitbucket',
+      config: params.config || DEFAULT_OPENRABBIT_CONFIG,
+      repoPath,
+      memoryFilePath: remoteMemoryFilePath(dataDir(), 'bitbucket', repository),
+    });
+
+  if (!params.pullRequestId) return await runReview();
+
+  return await withRemoteWorkspace(
+    {
+      cloneUrl,
+      ref: checkoutRef,
+      providerHost: bitbucketGitHost(),
+      auth: token ? { username: 'x-token-auth', password: token } : undefined,
+    },
+    (workspace) => runReview(workspace.path)
+  );
 }
