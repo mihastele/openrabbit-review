@@ -199,6 +199,15 @@ export interface ReviewResult {
     scannersRun: string[];
     scannersSkipped: string[];
   };
+  llmTelemetry?: {
+    parseOk: boolean;
+    findingsReceived: number;
+    findingsAccepted: number;
+    findingsDropped: number;
+    dropReasons: Record<string, number>;
+    truncatedFiles: number;
+    fallbackReason?: string;
+  };
 }
 
 export type ChatCommandType =

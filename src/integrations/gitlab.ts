@@ -2,6 +2,10 @@ import path from 'node:path';
 import { DEFAULT_OPENRABBIT_CONFIG } from '../config/config-loader.js';
 import { handlePRChat } from '../core/chat-engine.js';
 import {
+  formatSkippedSummary,
+  prepareInlineComments,
+} from '../core/inline-comments.js';
+import {
   formatInlineCommentMarkdown,
   WALKTHROUGH_COMMENT_MARKER,
 } from '../core/markdown-formatter.js';
@@ -159,6 +163,7 @@ export async function handleGitLabWebhookEvent(
       };
 
       // Post Walkthrough Note
+      const prepared = prepareInlineComments(reviewResult.findings, rawDiff);
       const noteResponse = await fetch(
         `${apiUrl}/projects/${encodeURIComponent(
           String(projectId)
@@ -170,13 +175,16 @@ export async function handleGitLabWebhookEvent(
             body:
               reviewResult.markdownWalkthrough +
               '\n\n' +
-              reviewResult.findings
+              prepared.comments
                 .map(
                   (f) =>
                     `#### \`${f.file}:${f.startLine}\`\n` +
                     formatInlineCommentMarkdown(f, 'gitlab')
                 )
-                .join('\n\n---\n\n'),
+                .join('\n\n---\n\n') +
+              (prepared.skipped.length > 0
+                ? `\n\n<sub>OpenRabbit skipped ${prepared.skipped.length} inline comment(s)${formatSkippedSummary(prepared.skipped)}.</sub>`
+                : ''),
           }),
         }
       );

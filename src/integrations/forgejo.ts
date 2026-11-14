@@ -6,6 +6,10 @@ import {
 } from '../config/config-loader.js';
 import { handlePRChat } from '../core/chat-engine.js';
 import {
+  formatSkippedSummary,
+  prepareInlineComments,
+} from '../core/inline-comments.js';
+import {
   formatInlineCommentMarkdown,
   WALKTHROUGH_COMMENT_MARKER,
 } from '../core/markdown-formatter.js';
@@ -309,8 +313,12 @@ export async function postForgejoInlineReview(
   pullNumber: number,
   commitSha: string,
   findings: InlineFinding[],
-  token: string
-): Promise<{ reviewId: number; commentsPosted: number }> {
+  token: string,
+  options?: { rawDiff?: string; maxComments?: number }
+): Promise<{ reviewId: number; commentsPosted: number; commentsSkipped: number }> {
+  const prepared = prepareInlineComments(findings, options?.rawDiff, {
+    maxComments: options?.maxComments,
+  });
   const response = await fetch(
     `${apiUrl()}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${pullNumber}/reviews`,
     {
@@ -319,8 +327,8 @@ export async function postForgejoInlineReview(
       body: JSON.stringify({
         commit_id: commitSha,
         event: 'COMMENT',
-        body: `🐇 **OpenRabbit** completed an inline code review with **${findings.length}** comment(s).`,
-        comments: findings.map((finding) => ({
+        body: `🐇 **OpenRabbit** completed an inline code review with **${prepared.comments.length}** comment(s)${formatSkippedSummary(prepared.skipped)}.`,
+        comments: prepared.comments.map((finding) => ({
           path: finding.file,
           new_line_num: finding.endLine || finding.startLine || 1,
           body: formatInlineCommentMarkdown(finding, 'github'),
@@ -334,7 +342,8 @@ export async function postForgejoInlineReview(
   const value = (await response.json()) as any;
   return {
     reviewId: Number(value.id || 0),
-    commentsPosted: findings.length,
+    commentsPosted: prepared.comments.length,
+    commentsSkipped: prepared.skipped.length,
   };
 }
 
@@ -479,7 +488,8 @@ export async function handleForgejoWebhookEvent(
           metadata.pullNumber,
           metadata.commitSha,
           reviewResult.findings,
-          token
+          token,
+          { rawDiff }
         );
       }
       postedToForgejo = true;
@@ -640,7 +650,8 @@ export async function runForgejoOnDemandReview(params: {
         params.pullNumber,
         commitSha,
         reviewResult.findings,
-        token
+        token,
+        { rawDiff }
       );
     }
   }

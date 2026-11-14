@@ -7,6 +7,7 @@ import type {
   ReviewSeverity,
 } from '../../types/index.js';
 import { LanguageRegistry, type LanguageRule } from '../languages/index.js';
+import { sanitizeSuggestionCode } from '../suggestion-validator.js';
 import {
   type BuiltinRuleCatalogItem,
   type BuiltinRulesMode,
@@ -324,6 +325,10 @@ export function doesRuleApplyToFile(rule: CustomRuleV1, file: FileDiff): boolean
 
 /**
  * Computes a committable suggestion from a matched line and rule definition.
+ *
+ * Returns `undefined` when no safe replacement exists: callers then render
+ * the prose guidance without a suggestion block instead of posting a
+ * truncated fragment that reads as gibberish.
  */
 export function computeSuggestion(
   line: string,
@@ -337,22 +342,30 @@ export function computeSuggestion(
 
   // If template contains capture group references ($1, etc.) or replaces match
   try {
+    regex.lastIndex = 0;
     if (regex.test(line)) {
+      regex.lastIndex = 0;
       const replaced = line.replace(regex, template);
-      return replaced;
+      return sanitizeSuggestionCode(replaced, line);
     }
   } catch {
-    // Fallback below
+    return undefined;
   }
 
+  // The pattern matched only multiline context, not this line: emitting the
+  // bare template here would produce a fragment unrelated to the commented
+  // line, so omit the suggestion block instead.
   if (template.includes('\n')) {
-    return template
-      .split('\n')
-      .map((l) => `${indent}${l}`)
-      .join('\n');
+    return sanitizeSuggestionCode(
+      template
+        .split('\n')
+        .map((l) => `${indent}${l}`)
+        .join('\n'),
+      line
+    );
   }
 
-  return `${indent}${template}`;
+  return undefined;
 }
 
 /**

@@ -781,7 +781,8 @@ async function runCli(): Promise<void> {
             prNum,
             result.commitSha,
             result.findings,
-            process.env.GITHUB_TOKEN
+            process.env.GITHUB_TOKEN,
+            { rawDiff }
           );
         }
         console.error(

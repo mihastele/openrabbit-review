@@ -6,6 +6,10 @@ import {
 } from '../config/config-loader.js';
 import { handlePRChat } from '../core/chat-engine.js';
 import {
+  formatSkippedSummary,
+  prepareInlineComments,
+} from '../core/inline-comments.js';
+import {
   formatInlineCommentMarkdown,
   WALKTHROUGH_COMMENT_MARKER,
 } from '../core/markdown-formatter.js';
@@ -181,8 +185,9 @@ export async function postGitHubInlineReview(
   pullNumber: number,
   commitSha: string,
   findings: InlineFinding[],
-  token: string
-): Promise<{ reviewId: number; commentsPosted: number }> {
+  token: string,
+  options?: { rawDiff?: string; maxComments?: number }
+): Promise<{ reviewId: number; commentsPosted: number; commentsSkipped: number }> {
   const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(
     /\/$/,
     ''
@@ -194,7 +199,10 @@ export async function postGitHubInlineReview(
     'User-Agent': 'OpenRabbit-Bot/1.0',
   };
 
-  const inlineComments = findings.map((f) => ({
+  const prepared = prepareInlineComments(findings, options?.rawDiff, {
+    maxComments: options?.maxComments,
+  });
+  const inlineComments = prepared.comments.map((f) => ({
     path: f.file,
     line: f.endLine || f.startLine || 1,
      ...(f.startLine && f.endLine && f.startLine < f.endLine
@@ -212,7 +220,7 @@ export async function postGitHubInlineReview(
       body: JSON.stringify({
         commit_id: commitSha,
         event: 'COMMENT',
-        body: `🐇 **OpenRabbit** completed an inline code review with **${inlineComments.length}** comment(s).`,
+        body: `🐇 **OpenRabbit** completed an inline code review with **${inlineComments.length}** comment(s)${formatSkippedSummary(prepared.skipped)}.`,
         comments: inlineComments,
       }),
     }
@@ -227,6 +235,7 @@ export async function postGitHubInlineReview(
   return {
     reviewId: data.id,
     commentsPosted: inlineComments.length,
+    commentsSkipped: prepared.skipped.length,
   };
 }
 
@@ -331,7 +340,8 @@ export async function handleGitHubWebhookEvent(
           pullNumber,
           commitSha,
           reviewResult.findings,
-          token
+          token,
+          { rawDiff }
         );
       }
       postedToGitHub = true;
@@ -589,7 +599,8 @@ export async function runGitHubOnDemandReview(params: {
         params.pullNumber,
         commitSha,
         reviewResult.findings,
-        token
+        token,
+        { rawDiff }
       );
     }
   }

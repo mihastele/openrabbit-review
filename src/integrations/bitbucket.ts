@@ -6,6 +6,10 @@ import {
 } from '../config/config-loader.js';
 import { handlePRChat } from '../core/chat-engine.js';
 import {
+  formatSkippedSummary,
+  prepareInlineComments,
+} from '../core/inline-comments.js';
+import {
   formatInlineCommentMarkdown,
   WALKTHROUGH_COMMENT_MARKER,
 } from '../core/markdown-formatter.js';
@@ -293,16 +297,20 @@ export async function handleBitbucketWebhookEvent(
 
     let postedToBitbucket = false;
     if (token && !payload.simulated_diff && workspace && repoSlug) {
+      const prepared = prepareInlineComments(reviewResult.findings, rawDiff);
       const combinedComment =
         reviewResult.markdownWalkthrough +
         '\n\n' +
-        reviewResult.findings
+        prepared.comments
           .map(
             (f) =>
               `#### \`${f.file}:${f.startLine}\`\n` +
               formatInlineCommentMarkdown(f, 'github')
           )
-          .join('\n\n---\n\n');
+          .join('\n\n---\n\n') +
+        (prepared.skipped.length > 0
+          ? `\n\n<sub>OpenRabbit skipped ${prepared.skipped.length} inline comment(s)${formatSkippedSummary(prepared.skipped)}.</sub>`
+          : '');
 
       await postBitbucketPRComment(
         workspace,
