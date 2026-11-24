@@ -21,6 +21,14 @@ export function renderEffortBar(score: 1 | 2 | 3 | 4 | 5): string {
   return `${filled}${empty} (${score}/5)`;
 }
 
+/**
+ * Escapes free text for use inside a Markdown table cell so literal pipes
+ * and newlines cannot break the walkthrough table layout.
+ */
+export function escapeTableCell(text: string): string {
+  return text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
 export function formatWalkthroughMarkdown(
   walkthrough: PRWalkthrough,
   findings: InlineFinding[],
@@ -89,7 +97,7 @@ export function formatWalkthroughMarkdown(
     const impactIcon =
       f.impact === 'high' ? '🔴 High' : f.impact === 'medium' ? '🟡 Med' : '🟢 Low';
     lines.push(
-      `| \`${f.path}\` | ${f.component} | \`+${f.additions}/-${f.deletions}\` | ${impactIcon} | ${f.summary} |`
+      `| \`${f.path}\` | ${escapeTableCell(f.component)} | \`+${f.additions}/-${f.deletions}\` | ${impactIcon} | ${escapeTableCell(f.summary)} |`
     );
   }
   lines.push('');
@@ -161,7 +169,7 @@ export function formatInlineCommentMarkdown(
     } else {
       lines.push('```suggestion');
     }
-    lines.push(finding.suggestionCode);
+    lines.push(finding.suggestionCode.replace(/```/g, "'''"));
     lines.push('```');
   }
 

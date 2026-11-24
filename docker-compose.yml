@@ -1,21 +1,29 @@
 services:
   openrabbit:
-    build: .
+    build:
+      context: .
+      target: ${OPENRABBIT_DOCKER_TARGET:-lite}
     container_name: openrabbit
-    ports:
-      - "3847:3847"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - PORT=3847
-      - OPENRABBIT_LLM_PROVIDER=${OPENRABBIT_LLM_PROVIDER:-auto}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
-      - GITLAB_TOKEN=${GITLAB_TOKEN:-}
-      - GITLAB_WEBHOOK_SECRET=${GITLAB_WEBHOOK_SECRET:-}
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3847
+      OPENRABBIT_DATA_DIR: /app/data
+      OPENRABBIT_ASYNC_WEBHOOKS: "true"
+      OPENRABBIT_JOB_CONCURRENCY: ${OPENRABBIT_JOB_CONCURRENCY:-1}
+      TRIVY_CACHE_DIR: /app/data/cache/trivy
+    ports:
+      - "${OPENRABBIT_BIND_ADDRESS:-127.0.0.1}:3847:3847"
     volumes:
       - ./data:/app/data
       - ./.openrabbit.yaml:/app/.openrabbit.yaml
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=512m,mode=1777

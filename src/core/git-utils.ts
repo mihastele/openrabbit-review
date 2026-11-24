@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,6 +18,8 @@ export interface LocalGitDiffOptions {
   baseBranch?: string;
   commitRange?: string;
   commitSha?: string;
+  /** Fail on Git errors and review only the requested changes, for CI callers. */
+  strict?: boolean;
 }
 
 function safeExec(cmd: string, cwd: string): string {
@@ -212,12 +214,21 @@ export function getCommitDiff(
   }
 
   const repoDir = validation.topLevel;
-  const safeSha = sha.replace(/[^a-fA-F0-9~^._-]/g, '');
-  if (!safeSha) {
-    throw new Error('Invalid commit SHA');
+  if (!sha || sha.startsWith('-') || /\s/.test(sha)) {
+    throw new Error('Invalid commit reference');
+  }
+  let safeSha: string;
+  try {
+    safeSha = execFileSync('git', ['rev-parse', '--verify', '--end-of-options', `${sha}^{commit}`], {
+      cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch {
+    throw new Error(`Invalid commit reference: ${sha}`);
   }
 
-  const diff = safeExec(`git show --format="" --patch ${safeSha}`, repoDir);
+  const diff = execFileSync('git', ['show', '--format=', '--patch', safeSha, '--'], {
+    cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 15 * 1024 * 1024,
+  }).trim();
 
   // Retrieve commit info
   const rawMeta = safeExec(
@@ -260,10 +271,18 @@ export function getCommitRangeDiff(
   }
 
   const repoDir = validation.topLevel;
-  const safeRange = range.replace(/[^a-fA-F0-9~^._\-@/\\]/g, '');
-  const diff = safeExec(`git diff ${safeRange}`, repoDir);
-  const countStr = safeExec(`git rev-list --count ${safeRange}`, repoDir);
-  const count = Number(countStr) || 1;
+  if (!range || range.startsWith('-') || /\s/.test(range) || !/^[^.].*\.{2,3}[^.].*$/.test(range)) {
+    throw new Error('Invalid commit range');
+  }
+  let diff: string;
+  let count: number;
+  try {
+    const options = { cwd: repoDir, encoding: 'utf8' as const, stdio: 'pipe' as const, maxBuffer: 15 * 1024 * 1024 };
+    diff = execFileSync('git', ['diff', range, '--'], options).trim();
+    count = Number(execFileSync('git', ['rev-list', '--count', range, '--'], options).trim());
+  } catch {
+    throw new Error(`Invalid or unavailable commit range: ${range}`);
+  }
 
   return {
     diff: diff ? diff + '\n' : '',
@@ -285,7 +304,16 @@ export function getLocalGitDiff(options: LocalGitDiffOptions = {}): {
 } {
   const rawCwd = options.cwd || process.cwd();
   const validation = validateGitRepository(rawCwd);
+  if (options.strict && !validation.valid) {
+    throw new Error(validation.error || 'Invalid git repository');
+  }
   const cwd = validation.topLevel || path.resolve(rawCwd);
+  const readDiff = (args: string[]) => options.strict
+    ? execFileSync('git', args, {
+        cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 15 * 1024 * 1024,
+      }).trim()
+    : safeExec(`git ${args.join(' ')}`, cwd);
 
   const branch = safeExec('git rev-parse --abbrev-ref HEAD', cwd) || 'main';
   const remoteUrl = safeExec('git config --get remote.origin.url', cwd);
@@ -316,20 +344,20 @@ export function getLocalGitDiff(options: LocalGitDiffOptions = {}): {
     diff = rangeData.diff;
     description = rangeData.title;
   } else if (options.baseBranch) {
-    diff = safeExec(`git diff ${options.baseBranch}...HEAD`, cwd);
+    diff = readDiff(['diff', `${options.baseBranch}...HEAD`, '--']);
     description = `Branch diff against ${options.baseBranch}`;
   } else if (options.staged) {
-    diff = safeExec('git diff --staged', cwd);
+    diff = readDiff(['diff', '--staged']);
     description = 'Staged changes (git diff --staged)';
   } else {
-    // Try unstaged + staged against HEAD, or fallback to last commit
-    diff = safeExec('git diff HEAD', cwd);
+    // Interactive callers retain the latest-commit fallback; CI reviews only changes.
+    diff = readDiff(['diff', 'HEAD', '--']);
     description = 'Working tree changes (git diff HEAD)';
     if (!diff) {
       diff = safeExec('git diff --staged', cwd);
       description = 'Staged changes';
     }
-    if (!diff) {
+    if (!diff && !options.strict) {
       diff = safeExec('git show --format="" --patch HEAD', cwd);
       description = 'Latest commit (HEAD)';
       commitSha = safeExec('git rev-parse HEAD', cwd) || undefined;

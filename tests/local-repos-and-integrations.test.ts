@@ -74,6 +74,13 @@ describe('Local Repositories & Integrations Suite', () => {
     });
     assert.ok(localCommitDiff.diff);
     assert.equal(localCommitDiff.commitSha, first.sha);
+    assert.equal(getCommitDiff(process.cwd(), 'HEAD').commit.sha, first.sha);
+    assert.throws(() => getCommitDiff(process.cwd(), 'missing-ref-for-test'), /Invalid commit reference/);
+    assert.throws(() => getCommitRangeDiff(process.cwd(), 'missing-ref-for-test..HEAD'), /Invalid or unavailable/);
+    assert.throws(() => getCommitRangeDiff(process.cwd(), 'HEAD;echo test'), /Invalid commit range/);
+    const emptyRange = getCommitRangeDiff(process.cwd(), 'HEAD..HEAD');
+    assert.equal(emptyRange.diff, '');
+    assert.equal(emptyRange.count, 0);
   });
 
   it('manages repository registration lifecycle in ReviewStore', async () => {

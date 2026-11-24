@@ -1,17 +1,51 @@
+import path from 'node:path';
 import { DEFAULT_OPENRABBIT_CONFIG } from '../config/config-loader.js';
 import { handlePRChat } from '../core/chat-engine.js';
+import {
+  formatSkippedSummary,
+  prepareInlineComments,
+} from '../core/inline-comments.js';
 import {
   formatInlineCommentMarkdown,
   WALKTHROUGH_COMMENT_MARKER,
 } from '../core/markdown-formatter.js';
 import { runPullRequestReview } from '../core/review-engine.js';
+import {
+  remoteMemoryFilePath,
+  withRemoteWorkspace,
+} from '../core/remote-workspace.js';
 import type { OpenRabbitConfig, ReviewResult } from '../types/index.js';
+
+function gitlabGitHost(): string {
+  if (process.env.GITLAB_WEB_HOST) return process.env.GITLAB_WEB_HOST;
+  try {
+    return new URL(
+      process.env.GITLAB_API_URL || 'https://gitlab.com/api/v4'
+    ).host;
+  } catch {
+    return 'gitlab.com';
+  }
+}
+
+function dataDir(): string {
+  return process.env.OPENRABBIT_DATA_DIR || path.join(process.cwd(), 'data');
+}
+
+function gitlabCloneUrl(payload: any): string {
+  if (typeof payload?.project?.git_http_url === 'string') {
+    return payload.project.git_http_url;
+  }
+  if (typeof payload?.project?.web_url === 'string') {
+    return `${payload.project.web_url.replace(/\/$/, '')}.git`;
+  }
+  return '';
+}
 
 export function verifyGitLabWebhookToken(
   headerToken: string | undefined,
   secret: string | undefined
 ): boolean {
-  if (!secret) return true;
+  if (!secret) return process.env.NODE_ENV !== 'production';
   return headerToken === secret;
 }
 
@@ -90,18 +124,33 @@ export async function handleGitLabWebhookEvent(
       rawDiff = await fetchGitLabMRDiff(projectId, mrIid, token);
     }
 
-    const reviewResult = await runPullRequestReview({
-      rawDiff,
-      prTitle,
-      repository: repoName,
-      prNumber: mrIid,
-      author,
-      baseBranch,
-      headBranch,
-      commitSha,
-      source: 'gitlab',
-      config,
-    });
+    const runReview = (repoPath?: string) =>
+      runPullRequestReview({
+        rawDiff,
+        prTitle,
+        repository: repoName,
+        prNumber: mrIid,
+        author,
+        baseBranch,
+        headBranch,
+        commitSha,
+        source: 'gitlab',
+        config,
+        repoPath,
+        memoryFilePath: remoteMemoryFilePath(dataDir(), 'gitlab', repoName),
+      });
+
+    const reviewResult = payload.simulated_diff
+      ? await runReview()
+      : await withRemoteWorkspace(
+          {
+            cloneUrl: gitlabCloneUrl(payload),
+            ref: `refs/merge-requests/${mrIid}/head`,
+            providerHost: gitlabGitHost(),
+            auth: token ? { username: 'oauth2', password: token } : undefined,
+          },
+          (workspace) => runReview(workspace.path)
+        );
 
     let postedToGitLab = false;
     if (token && !payload.simulated_diff) {
@@ -114,7 +163,8 @@ export async function handleGitLabWebhookEvent(
       };
 
       // Post Walkthrough Note
-      await fetch(
+      const prepared = prepareInlineComments(reviewResult.findings, rawDiff);
+      const noteResponse = await fetch(
         `${apiUrl}/projects/${encodeURIComponent(
           String(projectId)
         )}/merge_requests/${mrIid}/notes`,
@@ -125,16 +175,22 @@ export async function handleGitLabWebhookEvent(
             body:
               reviewResult.markdownWalkthrough +
               '\n\n' +
-              reviewResult.findings
+              prepared.comments
                 .map(
                   (f) =>
                     `#### \`${f.file}:${f.startLine}\`\n` +
                     formatInlineCommentMarkdown(f, 'gitlab')
                 )
-                .join('\n\n---\n\n'),
+                .join('\n\n---\n\n') +
+              (prepared.skipped.length > 0
+                ? `\n\n<sub>OpenRabbit skipped ${prepared.skipped.length} inline comment(s)${formatSkippedSummary(prepared.skipped)}.</sub>`
+                : ''),
           }),
         }
       );
+      if (!noteResponse.ok) {
+        throw new Error(`Failed to post GitLab review note (${noteResponse.status})`);
+      }
       postedToGitLab = true;
     }
 
@@ -178,6 +234,27 @@ export async function handleGitLabWebhookEvent(
     action: `Unsupported GitLab event: ${eventHeader || objectKind}`,
     postedToGitLab: false,
   };
+}
+
+async function fetchGitLabProjectWebUrl(
+  projectId: string | number,
+  token?: string
+): Promise<string> {
+  const apiUrl = (
+    process.env.GITLAB_API_URL || 'https://gitlab.com/api/v4'
+  ).replace(/\/$/, '');
+  const response = await fetch(
+    `${apiUrl}/projects/${encodeURIComponent(String(projectId))}`,
+    { headers: token ? { 'PRIVATE-TOKEN': token } : {} }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to fetch GitLab project (${response.status})`);
+  }
+  const value = (await response.json()) as any;
+  if (typeof value.web_url !== 'string') {
+    throw new Error('GitLab project response did not include web_url');
+  }
+  return `${value.web_url.replace(/\/$/, '')}.git`;
 }
 
 export async function fetchGitLabCommitDiff(
@@ -234,14 +311,31 @@ export async function runGitLabOnDemandReview(params: {
     throw new Error('Either mrIid or commitSha is required');
   }
 
-  return await runPullRequestReview({
-    rawDiff,
-    prTitle,
-    repository: `gitlab/${params.projectId}`,
-    prNumber: params.mrIid,
-    commitSha: params.commitSha,
-    source: 'gitlab',
-    config: params.config || DEFAULT_OPENRABBIT_CONFIG,
-  });
+  const repository = `gitlab/${params.projectId}`;
+  const runReview = (repoPath?: string) =>
+    runPullRequestReview({
+      rawDiff,
+      prTitle,
+      repository,
+      prNumber: params.mrIid,
+      commitSha: params.commitSha,
+      source: 'gitlab',
+      config: params.config || DEFAULT_OPENRABBIT_CONFIG,
+      repoPath,
+      memoryFilePath: remoteMemoryFilePath(dataDir(), 'gitlab', repository),
+    });
+
+  if (!params.mrIid) return await runReview();
+
+  const cloneUrl = await fetchGitLabProjectWebUrl(params.projectId, token);
+  return await withRemoteWorkspace(
+    {
+      cloneUrl,
+      ref: `refs/merge-requests/${params.mrIid}/head`,
+      providerHost: gitlabGitHost(),
+      auth: token ? { username: 'oauth2', password: token } : undefined,
+    },
+    (workspace) => runReview(workspace.path)
+  );
 }
 

@@ -16,28 +16,183 @@ export function inferComponentName(filePath: string): string {
 }
 
 /**
- * Extracts function, class, method, or hook names from hunk headers and diff lines.
+ * File extensions that carry prose, data, or styling rather than code
+ * definitions. Symbol extraction is skipped for these files so review
+ * summaries never present shell tokens, prose words, or CSS functions
+ * (e.g. `FAILED`, `one`, `rgba`) as changed code symbols.
  */
-export function extractChangedSymbols(hunks: DiffHunk[]): string[] {
+const NON_CODE_SYMBOL_EXTENSIONS = new Set([
+  'md',
+  'markdown',
+  'rst',
+  'adoc',
+  'yaml',
+  'yml',
+  'json',
+  'jsonc',
+  'json5',
+  'toml',
+  'ini',
+  'cfg',
+  'conf',
+  'properties',
+  'env',
+  'txt',
+  'csv',
+  'tsv',
+  'lock',
+  'css',
+  'scss',
+  'less',
+]);
+
+/**
+ * Tokens that language patterns can capture from calls, keywords, builtins,
+ * or prose but that are never useful as "changed symbol" names in a review.
+ */
+const SYMBOL_STOPWORDS = new Set([
+  // Control flow / language keywords
+  'if',
+  'for',
+  'while',
+  'switch',
+  'catch',
+  'else',
+  'do',
+  'try',
+  'finally',
+  'return',
+  'case',
+  'default',
+  'break',
+  'continue',
+  'throw',
+  'new',
+  'delete',
+  'typeof',
+  'void',
+  'struct',
+  'enum',
+  'union',
+  'static',
+  'extern',
+  'define',
+  'ifdef',
+  'ifndef',
+  'endif',
+  'include',
+  // Test globals (calls, not definitions)
+  'it',
+  'describe',
+  'test',
+  'expect',
+  // Common builtins / globals mis-captured from call sites
+  'len',
+  'max',
+  'min',
+  'range',
+  'abs',
+  'zip',
+  'map',
+  'filter',
+  'list',
+  'dict',
+  'set',
+  'str',
+  'int',
+  'float',
+  'bool',
+  'print',
+  'open',
+  'super',
+  'self',
+  'isinstance',
+  'hasattr',
+  'getattr',
+  'enumerate',
+  'sorted',
+  'sum',
+  'any',
+  'all',
+  'repr',
+  'type',
+  'id',
+  'as',
+  'is',
+  // Prose words mis-captured from docs, comments, and docstrings
+  'the',
+  'a',
+  'an',
+  'one',
+  'are',
+  'be',
+  'and',
+  'or',
+  'of',
+  'to',
+  'in',
+  'on',
+  'with',
+  'counts',
+  'least',
+  'returns',
+]);
+
+/**
+ * Returns true for prose, data, or styling files where "changed symbols"
+ * and "module" wording would read as gibberish in a review summary.
+ */
+export function isNonCodeFilePath(filePath: string): boolean {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  return NON_CODE_SYMBOL_EXTENSIONS.has(ext);
+}
+
+function isPlausibleSymbolName(name: string): boolean {
+  if (!name || name.length < 2) return false;
+  if (SYMBOL_STOPWORDS.has(name)) return false;
+  if (SYMBOL_STOPWORDS.has(name.toLowerCase())) return false;
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return false;
+  return true;
+}
+
+/**
+ * Extracts function, class, method, or hook names from hunk headers and diff lines.
+ *
+ * Patterns are scoped to the language strategy of `filePath` so a C++ or Java
+ * pattern can no longer match prose inside Markdown/YAML/Python diffs. Files
+ * with non-code extensions yield no symbols.
+ */
+export function extractChangedSymbols(hunks: DiffHunk[], filePath?: string): string[] {
   const symbols = new Set<string>();
-  const patterns = LanguageRegistry.getInstance().getAllSymbolPatterns();
+
+  if (filePath) {
+    const ext = filePath.split('.').pop()?.toLowerCase() || '';
+    if (NON_CODE_SYMBOL_EXTENSIONS.has(ext)) {
+      return [];
+    }
+  }
+
+  const registry = LanguageRegistry.getInstance();
+  const patterns = filePath
+    ? registry.getStrategyForFile(filePath).symbolPatterns
+    : registry.getAllSymbolPatterns();
+
+  const collect = (text: string) => {
+    for (const regex of patterns) {
+      regex.lastIndex = 0;
+      const m = text.match(regex);
+      if (m && m[1] && isPlausibleSymbolName(m[1])) {
+        symbols.add(m[1]);
+      }
+    }
+  };
 
   for (const hunk of hunks) {
     if (hunk.sectionHeading) {
-      for (const regex of patterns) {
-        const m = hunk.sectionHeading.match(regex);
-        if (m && m[1] && !['if', 'for', 'while', 'switch', 'catch'].includes(m[1])) {
-          symbols.add(m[1]);
-        }
-      }
+      collect(hunk.sectionHeading);
     }
     for (const line of hunk.lines) {
-      for (const regex of patterns) {
-        const m = line.content.match(regex);
-        if (m && m[1] && !['if', 'for', 'while', 'switch', 'catch'].includes(m[1])) {
-          symbols.add(m[1]);
-        }
-      }
+      collect(line.content);
     }
   }
 
@@ -70,7 +225,10 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiff {
   const flushFile = () => {
     if (currentFile) {
       currentFile.rawPatch = currentPatchLines.join('\n').trim();
-      currentFile.symbolsChanged = extractChangedSymbols(currentFile.hunks);
+      currentFile.symbolsChanged = extractChangedSymbols(
+        currentFile.hunks,
+        currentFile.newPath
+      );
       files.push(currentFile);
     }
     currentFile = null;

@@ -34,7 +34,7 @@
       "languages": ["*"],
       "rule": {
         "type": "regex",
-        "pattern": "['\"]http:\\/\\/(?!localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)[a-zA-Z0-9_.-]+",
+        "pattern": "(?<=['\"])http:\\/\\/(?!localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)(?=[a-zA-Z0-9_.-]+)",
         "flags": "i",
         "notPattern": "http:\\/\\/schemas\\.|http:\\/\\/www\\.w3\\.org",
         "suggestionTemplate": "https://"
@@ -44,9 +44,9 @@
     },
     {
       "schemaVersion": "v1",
-      "id": "perf-no-sync-fs",
-      "title": "Blocking synchronous filesystem call in async execution path",
-      "description": "Synchronous filesystem methods (readFileSync, writeFileSync) block Node.js event loop threads, hurting server throughput and scalability. Prefer fs.promises or asynchronous counterparts.",
+      "id": "perf-no-sync-fs-read",
+      "title": "Blocking synchronous readFileSync call in async execution path",
+      "description": "Synchronous filesystem methods (readFileSync) block Node.js event loop threads, hurting server throughput and scalability. Prefer fs.promises.readFile or asynchronous counterparts.",
       "severity": "warning",
       "category": "performance",
       "languages": ["typescript", "javascript"],
@@ -54,9 +54,46 @@
       "pathFilter": "!**/*.test.*",
       "rule": {
         "type": "regex",
-        "pattern": "\\bfs\\.(?:readFileSync|writeFileSync|existsSync)\\s*\\(",
+        "pattern": "\\bfs\\.readFileSync\\s*\\(",
         "flags": "i",
         "suggestionTemplate": "await fs.promises.readFile("
+      },
+      "enabled": true,
+      "tags": ["performance", "node"]
+    },
+    {
+      "schemaVersion": "v1",
+      "id": "perf-no-sync-fs-write",
+      "title": "Blocking synchronous writeFileSync call in async execution path",
+      "description": "Synchronous filesystem methods (writeFileSync) block Node.js event loop threads, hurting server throughput and scalability. Prefer fs.promises.writeFile or asynchronous counterparts.",
+      "severity": "warning",
+      "category": "performance",
+      "languages": ["typescript", "javascript"],
+      "fileExtensions": ["ts", "tsx", "js", "mjs"],
+      "pathFilter": "!**/*.test.*",
+      "rule": {
+        "type": "regex",
+        "pattern": "\\bfs\\.writeFileSync\\s*\\(",
+        "flags": "i",
+        "suggestionTemplate": "await fs.promises.writeFile("
+      },
+      "enabled": true,
+      "tags": ["performance", "node"]
+    },
+    {
+      "schemaVersion": "v1",
+      "id": "perf-no-sync-fs-exists",
+      "title": "Blocking synchronous existsSync call in async execution path",
+      "description": "Synchronous filesystem methods (existsSync) block Node.js event loop threads, hurting server throughput and scalability. Restructure to attempt the async operation and handle ENOENT, or use fs.promises.access where a pre-check is unavoidable.",
+      "severity": "warning",
+      "category": "performance",
+      "languages": ["typescript", "javascript"],
+      "fileExtensions": ["ts", "tsx", "js", "mjs"],
+      "pathFilter": "!**/*.test.*",
+      "rule": {
+        "type": "regex",
+        "pattern": "\\bfs\\.existsSync\\s*\\(",
+        "flags": "i"
       },
       "enabled": true,
       "tags": ["performance", "node"]

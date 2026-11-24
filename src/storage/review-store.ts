@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DEFAULT_OPENRABBIT_CONFIG } from '../config/config-loader.js';
 import {
   findSubrepos,
+  getCommitRangeDiff,
   getRepoMetadata,
   validateGitRepository,
 } from '../core/git-utils.js';
@@ -464,11 +465,21 @@ index 0000000..3f4a5b6
   },
 ];
 
+export interface PRReviewState {
+  repository: string;
+  prNumber: number;
+  lastReviewedSha: string;
+  lastReviewId: string;
+  updatedAt: string;
+}
+
 export class ReviewStore {
   private filePath: string;
   private reposFilePath: string;
+  private prStatesFilePath: string;
   private reviews: ReviewResult[] = [];
   private repositories: LocalRepoInfo[] = [];
+  private prStates: PRReviewState[] = [];
   private initialized = false;
 
   constructor(storageDir: string = path.join(process.cwd(), 'data')) {
@@ -477,6 +488,7 @@ export class ReviewStore {
     }
     this.filePath = path.join(storageDir, 'reviews.json');
     this.reposFilePath = path.join(storageDir, 'repositories.json');
+    this.prStatesFilePath = path.join(storageDir, 'pr-states.json');
   }
 
   public async init(): Promise<void> {
@@ -493,6 +505,19 @@ export class ReviewStore {
         }
       } catch {
         this.repositories = [];
+      }
+    }
+
+    // Load PR incremental review states
+    if (fs.existsSync(this.prStatesFilePath)) {
+      try {
+        const raw = fs.readFileSync(this.prStatesFilePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.prStates = parsed;
+        }
+      } catch {
+        this.prStates = [];
       }
     }
 
@@ -535,6 +560,11 @@ export class ReviewStore {
       } catch {
         // Re-seed if corrupted
       }
+    }
+
+    // Production starts empty. Demo templates are explicit and never seeded.
+    if (process.env.NODE_ENV === 'production') {
+      return;
     }
 
     // Seed with initial sample reviews so the dashboard is immediately rich
@@ -772,6 +802,85 @@ export class ReviewStore {
       estimatedHoursSaved: +(totalReviews * 0.45 + totalFindings * 0.15).toFixed(1),
       categoryBreakdown,
     };
+  }
+
+  public async getPRReviewState(
+    repository: string,
+    prNumber: number
+  ): Promise<PRReviewState | undefined> {
+    await this.init();
+    return this.prStates.find(
+      (s) => s.repository === repository && s.prNumber === prNumber
+    );
+  }
+
+  public async upsertPRReviewState(
+    state: Omit<PRReviewState, 'updatedAt'>
+  ): Promise<PRReviewState> {
+    await this.init();
+    const updated: PRReviewState = {
+      ...state,
+      updatedAt: new Date().toISOString(),
+    };
+    const idx = this.prStates.findIndex(
+      (s) => s.repository === state.repository && s.prNumber === state.prNumber
+    );
+    if (idx >= 0) {
+      this.prStates[idx] = updated;
+    } else {
+      this.prStates.unshift(updated);
+    }
+    this.persistPRStates();
+    return updated;
+  }
+
+  /**
+   * Resolves an incremental commit-range diff (`lastReviewedSha..headSha`) when a
+   * previous review SHA is recorded and still reachable in `repoPath`.
+   */
+  public async resolveIncrementalDiff(
+    repoPath: string,
+    repository: string,
+    prNumber: number,
+    headSha: string
+  ): Promise<
+    | { incremental: true; baseSha: string; headSha: string; diff: string; commitCount: number }
+    | { incremental: false; reason: string }
+  > {
+    const state = await this.getPRReviewState(repository, prNumber);
+    if (!state?.lastReviewedSha) {
+      return { incremental: false, reason: 'no_prior_review' };
+    }
+    if (state.lastReviewedSha === headSha) {
+      return { incremental: false, reason: 'already_reviewed_sha' };
+    }
+    try {
+      const rangeRes = getCommitRangeDiff(
+        repoPath,
+        `${state.lastReviewedSha}..${headSha}`
+      );
+      return {
+        incremental: true,
+        baseSha: state.lastReviewedSha,
+        headSha,
+        diff: rangeRes.diff,
+        commitCount: rangeRes.count,
+      };
+    } catch {
+      return { incremental: false, reason: 'prior_sha_unreachable' };
+    }
+  }
+
+  private persistPRStates(): void {
+    try {
+      fs.writeFileSync(
+        this.prStatesFilePath,
+        JSON.stringify(this.prStates, null, 2),
+        'utf8'
+      );
+    } catch (err) {
+      console.warn('[OpenRabbit] Failed to persist PR review states:', err);
+    }
   }
 
   private persist(): void {

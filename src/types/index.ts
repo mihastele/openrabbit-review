@@ -38,12 +38,22 @@ export interface PathInstruction {
   instructions: string;
 }
 
+export interface SecurityScannersConfig {
+  enabled: boolean;
+  semgrep: boolean;
+  trivy: boolean;
+  gitleaks: boolean;
+  timeout_ms: number;
+  diff_only: boolean;
+}
+
 export interface OpenRabbitConfig {
   language: string;
   profile: ReviewProfile;
   tone_instructions: string;
   early_access?: boolean;
   reviewer?: ReviewerExecutionMode;
+  security_scanners?: SecurityScannersConfig;
   static_analysis?: {
     enabled: boolean;
     builtinRules: {
@@ -159,7 +169,7 @@ export interface PRWalkthrough {
 export interface ReviewResult {
   id: string;
   createdAt: string;
-  source: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'playground';
+  source: 'cli' | 'github' | 'gitlab' | 'bitbucket' | 'forgejo' | 'playground';
   repository: string;
   prNumber?: number;
   prTitle: string;
@@ -185,6 +195,19 @@ export interface ReviewResult {
   findings: InlineFinding[];
   markdownWalkthrough: string;
   rawDiff?: string;
+  scannerTelemetry?: {
+    scannersRun: string[];
+    scannersSkipped: string[];
+  };
+  llmTelemetry?: {
+    parseOk: boolean;
+    findingsReceived: number;
+    findingsAccepted: number;
+    findingsDropped: number;
+    dropReasons: Record<string, number>;
+    truncatedFiles: number;
+    fallbackReason?: string;
+  };
 }
 
 export type ChatCommandType =
@@ -195,6 +218,8 @@ export type ChatCommandType =
   | 'summary'
   | 'config'
   | 'resolve'
+  | 'ignore'
+  | 'remember'
   | 'question';
 
 export interface ChatRequest {
@@ -204,6 +229,8 @@ export interface ChatRequest {
   line?: number;
   findingContext?: InlineFinding;
   prTitle?: string;
+  repoPath?: string;
+  memoryFilePath?: string;
 }
 
 export interface ChatResponse {
