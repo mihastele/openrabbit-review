@@ -3,7 +3,7 @@ import { it, type TestContext } from 'node:test';
 import { DEFAULT_OPENRABBIT_CONFIG } from '../src/config/config-loader.js';
 import { WALKTHROUGH_COMMENT_MARKER } from '../src/core/markdown-formatter.js';
 import { runPullRequestReview } from '../src/core/review-engine.js';
-import { publishGitHubPRReview } from '../src/integrations/github.js';
+import { postGitHubInlineReview, publishGitHubPRReview } from '../src/integrations/github.js';
 
 const target = { owner: 'acme', repo: 'openrabbit', pullNumber: 7, token: 'test-token' };
 const actor = 'openrabbit-bot[bot]';
@@ -12,16 +12,17 @@ const snapshot = { baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40) };
 const repoPath = '/repos/acme/openrabbit';
 const commentsPath = repoPath + '/issues/7/comments';
 const reviewsPath = repoPath + '/pulls/7/reviews';
+const inlinePath = repoPath + '/pulls/7/comments';
 
-async function createReview() {
+async function createReview(lines = [1], comparedValue = 0) {
+  const baseline = `export const isFirst = (count: number) => count === ${comparedValue};`;
+  const changed = baseline.replace('===', '==');
   return runPullRequestReview({
     rawDiff: [
       'diff --git a/queue.ts b/queue.ts',
       '--- a/queue.ts',
       '+++ b/queue.ts',
-      '@@ -1 +1 @@',
-      '-export const isFirst = (count: number) => count === 0;',
-      '+export const isFirst = (count: number) => count == 0;',
+      ...lines.flatMap((line) => [`@@ -${line} +${line} @@`, '-' + baseline, '+' + changed]),
       '',
     ].join('\n'),
     config: { ...DEFAULT_OPENRABBIT_CONFIG, llm: { ...DEFAULT_OPENRABBIT_CONFIG.llm, provider: 'heuristic' } },
@@ -34,6 +35,13 @@ const fresh = async () => true;
 
 type Comment = { id: number; body: string; user: { login: string } };
 type InlineReview = Comment & { state: string; commit_id: string };
+type InlineComment = Comment & {
+  path: string;
+  line: number;
+  side: string;
+  position?: number | null;
+  pull_request_review_id: number;
+};
 
 function mockPublications(t: TestContext, options: {
   comments?: Comment[];
@@ -44,6 +52,7 @@ function mockPublications(t: TestContext, options: {
 } = {}) {
   const comments = options.comments ?? [];
   const reviews = options.reviews ?? [];
+  const inlineComments: InlineComment[] = [];
   const pageSize = options.pageSize ?? 100;
   const writes: string[] = [];
   let dropResponseTo = options.dropResponseTo;
@@ -60,9 +69,9 @@ function mockPublications(t: TestContext, options: {
     const url = new URL(input);
     const method = init.method ?? 'GET';
     if (method === 'GET') {
-      assert.ok([commentsPath, reviewsPath].includes(url.pathname), url.pathname);
+      assert.ok([commentsPath, reviewsPath, inlinePath].includes(url.pathname), url.pathname);
       if (options.failLookup) return new Response(null, { status: 503 });
-      const rows = url.pathname === commentsPath ? comments : reviews;
+      const rows = url.pathname === commentsPath ? comments : url.pathname === reviewsPath ? reviews : inlineComments;
       const page = Number(url.searchParams.get('page') ?? 1);
       const headers = page * pageSize < rows.length
         ? { Link: `<${url.origin}${url.pathname}?per_page=100&page=${page + 1}>; rel="next"` }
@@ -85,12 +94,15 @@ function mockPublications(t: TestContext, options: {
     assert.equal(method, 'POST');
     assert.equal(url.pathname, reviewsPath);
     assert.equal(data.event, 'COMMENT');
-    assert.equal(data.comments.length, 1);
+    assert.ok(data.comments.length > 0);
     const review = { id: 200 + reviews.length, body: data.body, user, state: 'COMMENTED', commit_id: data.commit_id };
     reviews.push(review);
+    for (const comment of data.comments) {
+      inlineComments.push({ ...comment, id: 400 + inlineComments.length, user, pull_request_review_id: review.id });
+    }
     return respondToWrite('inline', review);
   });
-  return { writes, comments, reviews };
+  return { writes, comments, reviews, inlineComments };
 }
 
 for (const resource of ['walkthrough', 'inline'] as const) {
@@ -158,3 +170,56 @@ it('stops before creating a walkthrough when lookup fails', async (t) => {
   await assert.rejects(publishGitHubPRReview(target, snapshot, review, fresh, actor), /list GitHub publications.*503/);
   assert.deepEqual(remote.writes, []);
 });
+
+it('reuses a shifted finding and gives the comment budget to a second occurrence', async (t) => {
+  const remote = mockPublications(t, { pageSize: 1 });
+  await publishGitHubPRReview(target, snapshot, await createReview(), fresh, actor);
+  const [original] = remote.inlineComments;
+  assert.match(original.body, /<!-- openrabbit-finding:v1:[a-f0-9]{64} -->$/);
+
+  // GitHub maps the old comment to its current line after the second push.
+  original.line = 12;
+  const newSnapshot = { ...snapshot, headSha: 'c'.repeat(40) };
+  await publishGitHubPRReview(target, newSnapshot, await createReview([12]), fresh, actor);
+  assert.equal(remote.reviews.length, 1);
+
+  const review = await createReview([12, 20]);
+  const result = await postGitHubInlineReview(
+    target.owner, target.repo, target.pullNumber, newSnapshot.headSha, review.findings, target.token,
+    {
+      rawDiff: review.rawDiff,
+      maxComments: 1,
+      snapshot: { baseSha: snapshot.baseSha, actorLogin: actor, ensureCurrent: async () => {} },
+    }
+  );
+  assert.equal(result.commentsPosted, 1);
+  assert.equal(result.commentsSkipped, 1);
+  assert.deepEqual(remote.inlineComments.map((comment) => comment.line), [12, 20]);
+  assert.match(remote.reviews[1].body, /1 already-commented/);
+});
+
+const newFindingCases: {
+  why: string;
+  earlierComment?: Partial<InlineComment>;
+  comparedValue?: number;
+  escalate?: boolean;
+}[] = [
+  { why: 'the anchor is outdated', earlierComment: { position: null } },
+  { why: 'the evidence changes', comparedValue: 1 },
+  { why: 'the comment has no fingerprint', earlierComment: { body: 'OpenRabbit review without a fingerprint' } },
+  { why: 'the author differs', earlierComment: { user: { login: 'contributor' } } },
+  { why: 'the severity increases', escalate: true },
+];
+
+for (const { why, earlierComment, comparedValue, escalate } of newFindingCases) {
+  it('posts a fresh finding when ' + why, async (t) => {
+    const remote = mockPublications(t);
+    await publishGitHubPRReview(target, snapshot, await createReview(), fresh, actor);
+    Object.assign(remote.inlineComments[0], earlierComment);
+    const current = await createReview([1], comparedValue);
+    if (escalate) current.findings[0].severity = 'warning';
+    await publishGitHubPRReview(target, { ...snapshot, headSha: 'c'.repeat(40) }, current, fresh, actor);
+    assert.equal(remote.reviews.length, 2);
+    assert.equal(remote.inlineComments.length, 2);
+  });
+}

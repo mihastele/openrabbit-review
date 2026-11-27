@@ -180,6 +180,17 @@ interface GitHubInlinePublication extends GitHubPublication {
   commit_id?: string;
 }
 
+interface GitHubReviewComment extends GitHubPublication {
+  path: string;
+  line?: number | null;
+  start_line?: number | null;
+  side?: 'LEFT' | 'RIGHT';
+  start_side?: 'LEFT' | 'RIGHT' | null;
+  position?: number | null;
+  in_reply_to_id?: number;
+  pull_request_review_id?: number;
+}
+
 function gitHubPublishHeaders(token: string): Record<string, string> {
   return {
     Accept: 'application/vnd.github+json',
@@ -189,11 +200,10 @@ function gitHubPublishHeaders(token: string): Record<string, string> {
   };
 }
 
-async function findGitHubPublication<T>(
+async function* listGitHubPublications<T>(
   endpoint: string,
-  headers: Record<string, string>,
-  matches: (publication: T) => boolean
-): Promise<T | undefined> {
+  headers: Record<string, string>
+): AsyncGenerator<T> {
   for (let page = 1; ; page++) {
     const suffix = page === 1 ? '?per_page=100' : `?per_page=100&page=${page}`;
     const response = await fetch(endpoint + suffix, { headers, signal: AbortSignal.timeout(30_000) });
@@ -201,8 +211,18 @@ async function findGitHubPublication<T>(
       throw new Error(`Failed to list GitHub publications (${response.status}).`);
     }
     const publications: T[] = await response.json();
-    const found = publications.find(matches);
-    if (found || !response.headers.get('link')?.includes('rel="next"')) return found;
+    yield* publications;
+    if (!response.headers.get('link')?.includes('rel="next"')) return;
+  }
+}
+
+async function findGitHubPublication<T>(
+  endpoint: string,
+  headers: Record<string, string>,
+  matches: (publication: T) => boolean
+): Promise<T | undefined> {
+  for await (const publication of listGitHubPublications<T>(endpoint, headers)) {
+    if (matches(publication)) return publication;
   }
 }
 
@@ -224,6 +244,39 @@ async function resolveGitHubPublisher(token: string): Promise<string> {
 
 function isOwnedPublication(publication: GitHubPublication, actorLogin: string): boolean {
   return publication.user?.login?.toLowerCase() === actorLogin.toLowerCase();
+}
+
+const findingMarkerPrefix = 'openrabbit-finding:v1:';
+const findingMarkerPattern = /(?:^|\n)<!-- openrabbit-finding:v1:([a-f0-9]{64}) -->$/;
+
+function findingFingerprint(finding: InlineFinding, evidence: string[]): string {
+  const identity = finding.ruleMatched || finding.title.trim().replace(/\s+/g, ' ');
+  return crypto.createHash('sha256').update(JSON.stringify([
+    finding.category, finding.severity, identity, evidence,
+  ])).digest('hex');
+}
+
+function findingAnchorKey(file: string, start: number, end: number, fingerprint: string): string {
+  return JSON.stringify([file, start, end, fingerprint]);
+}
+
+async function listLiveGitHubFindings(
+  endpoint: string,
+  headers: Record<string, string>,
+  actorLogin: string
+): Promise<Map<string, number>> {
+  const anchors = new Map<string, number>();
+  for await (const comment of listGitHubPublications<GitHubReviewComment>(endpoint, headers)) {
+    const end = comment.line;
+    const start = comment.start_line ?? end;
+    const reviewId = comment.pull_request_review_id;
+    if (!isOwnedPublication(comment, actorLogin) || comment.in_reply_to_id ||
+        comment.side !== 'RIGHT' || comment.start_side === 'LEFT' || comment.position === null ||
+        !start || !end || !reviewId) continue;
+    const fingerprint = comment.body?.trimEnd().match(findingMarkerPattern)?.[1];
+    if (fingerprint) anchors.set(findingAnchorKey(comment.path, start, end, fingerprint), reviewId);
+  }
+  return anchors;
 }
 
 export async function upsertGitHubWalkthroughComment(
@@ -295,40 +348,66 @@ export async function postGitHubInlineReview(
   );
   const headers = gitHubPublishHeaders(token);
   const endpoint = `${apiUrl}/repos/${owner}/${repo}/pulls/${pullNumber}/reviews`;
-
-  const prepared = prepareInlineComments(findings, options?.rawDiff, {
-    maxComments: options?.maxComments,
-  });
-  const inlineComments = prepared.comments.map((f) => ({
-    path: f.file,
-    line: f.endLine || f.startLine || 1,
-     ...(f.startLine && f.endLine && f.startLine < f.endLine
-      ? { start_line: f.startLine, start_side: 'RIGHT' }
-      : {}),
-    side: 'RIGHT',
-    body: formatInlineCommentMarkdown(f, 'github'),
-  }));
-
-  let body = `🐇 **OpenRabbit** completed an inline code review with **${inlineComments.length}** comment(s)${formatSkippedSummary(prepared.skipped)}.`;
   const snapshot = options?.snapshot;
+  let marker: string | undefined;
+  let existing: GitHubInlinePublication | undefined;
+  let liveFindings: Map<string, number> | undefined;
   if (snapshot) {
     const head = commitSha.toLowerCase();
     const base = snapshot.baseSha.toLowerCase();
     if (!gitHubCommitSha.test(base) || !gitHubCommitSha.test(head)) {
       throw new Error('Inline review publication requires full base and head commit SHAs.');
     }
-    const marker = `<!-- openrabbit-inline-review:${base}:${head} -->`;
-    const existing = await findGitHubPublication<GitHubInlinePublication>(
+    marker = `<!-- openrabbit-inline-review:${base}:${head} -->`;
+    existing = await findGitHubPublication<GitHubInlinePublication>(
       endpoint, headers,
       (review) => review.state === 'COMMENTED' && review.commit_id?.toLowerCase() === head &&
         isOwnedPublication(review, snapshot.actorLogin) && review.body?.trimEnd().endsWith('\n' + marker) === true
     );
-    await snapshot.ensureCurrent();
-    if (existing) {
-      return { reviewId: existing.id, commentsPosted: 0, commentsSkipped: prepared.skipped.length };
+    if (!existing && options.rawDiff) {
+      const commentsEndpoint = `${apiUrl}/repos/${owner}/${repo}/pulls/${pullNumber}/comments`;
+      liveFindings = await listLiveGitHubFindings(commentsEndpoint, headers, snapshot.actorLogin);
     }
-    body += '\n\n' + marker;
   }
+
+  const fingerprints = new Map<InlineFinding, string>();
+  let priorReviewId: number | undefined;
+  const prepared = prepareInlineComments(findings, options?.rawDiff, {
+    maxComments: options?.maxComments,
+    alreadyPublished: liveFindings && ((finding, evidence) => {
+      if (evidence.length === 0) return false;
+      const fingerprint = findingFingerprint(finding, evidence);
+      const key = findingAnchorKey(finding.file, finding.startLine, finding.endLine, fingerprint);
+      const existingId = liveFindings.get(key);
+      if (existingId !== undefined) {
+        priorReviewId = existingId;
+        return true;
+      }
+      fingerprints.set(finding, fingerprint);
+      return false;
+    }),
+  });
+  await snapshot?.ensureCurrent();
+  const reusedReviewId = existing?.id ?? (prepared.comments.length === 0 ? priorReviewId : undefined);
+  if (reusedReviewId !== undefined) {
+    return { reviewId: reusedReviewId, commentsPosted: 0, commentsSkipped: prepared.skipped.length };
+  }
+
+  const inlineComments = prepared.comments.map((finding) => {
+    const fingerprint = fingerprints.get(finding);
+    const findingMarker = fingerprint ? `\n\n<!-- ${findingMarkerPrefix}${fingerprint} -->` : '';
+    return {
+      path: finding.file,
+      line: finding.endLine || finding.startLine || 1,
+      ...(finding.startLine && finding.endLine && finding.startLine < finding.endLine
+        ? { start_line: finding.startLine, start_side: 'RIGHT' }
+        : {}),
+      side: 'RIGHT',
+      body: formatInlineCommentMarkdown(finding, 'github') + findingMarker,
+    };
+  });
+  let body = `🐇 **OpenRabbit** completed an inline code review with **${inlineComments.length}** comment(s)${formatSkippedSummary(prepared.skipped)}.`;
+  if (marker) body += '\n\n' + marker;
 
   const res = await fetch(endpoint, {
     method: 'POST',
