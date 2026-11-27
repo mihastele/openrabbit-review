@@ -13,6 +13,7 @@ export interface ReviewJob<TPayload = unknown, TResult = unknown> {
   createdAt: string;
   updatedAt: string;
   startedAt?: string;
+  nextAttemptAt?: string;
   completedAt?: string;
   error?: string;
   payload: TPayload;
@@ -25,6 +26,15 @@ export interface ReviewJobQueueOptions<TPayload, TResult> {
   retryDelayMs?: number;
   persistPath?: string;
   processor: (job: ReviewJob<TPayload, TResult>) => Promise<TResult>;
+}
+
+export class JobQueuePersistenceError extends Error {}
+
+const HISTORY_LIMIT = 200;
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+function isPending(status: ReviewJobStatus): boolean {
+  return status === 'queued' || status === 'running';
 }
 
 /**
@@ -40,15 +50,20 @@ export class ReviewJobQueue<TPayload = unknown, TResult = unknown> {
 
   private jobs: ReviewJob<TPayload, TResult>[] = [];
   private activeCount = 0;
+  private retryTimer?: NodeJS.Timeout;
   private idleResolvers: Array<() => void> = [];
 
   constructor(options: ReviewJobQueueOptions<TPayload, TResult>) {
-    this.concurrency = Math.max(1, options.concurrency ?? 2);
-    this.maxAttempts = Math.max(1, options.maxAttempts ?? 2);
-    this.retryDelayMs = Math.max(0, options.retryDelayMs ?? 250);
+    this.concurrency = Math.max(1, Math.ceil(options.concurrency ?? 2));
+    this.maxAttempts = Math.max(1, Math.ceil(options.maxAttempts ?? 2));
+    const delay = options.retryDelayMs ?? 250;
+    this.retryDelayMs = Number.isFinite(delay) ? Math.max(0, delay) : 250;
     this.persistPath = options.persistPath;
     this.processor = options.processor;
     this.loadFromDisk();
+    if (this.jobs.some((job) => isPending(job.status))) {
+      queueMicrotask(() => this.drain());
+    }
   }
 
   public enqueue(
@@ -64,7 +79,7 @@ export class ReviewJobQueue<TPayload = unknown, TResult = unknown> {
 
     const now = new Date().toISOString();
     const job: ReviewJob<TPayload, TResult> = {
-      id: `job-${crypto.randomUUID().slice(0, 8)}`,
+      id: `job-${crypto.randomUUID()}`,
       key,
       status: 'queued',
       attempts: 0,
@@ -74,11 +89,9 @@ export class ReviewJobQueue<TPayload = unknown, TResult = unknown> {
       payload,
     };
 
-    this.jobs.unshift(job);
-    if (this.jobs.length > 200) {
-      this.jobs = this.jobs.slice(0, 200);
-    }
-    this.persistToDisk();
+    const jobs = [job, ...this.jobs];
+    this.persistToDisk(jobs);
+    this.jobs = jobs;
     this.drain();
     return { job, deduplicated: false };
   }
@@ -92,9 +105,7 @@ export class ReviewJobQueue<TPayload = unknown, TResult = unknown> {
   }
 
   public waitForIdle(): Promise<void> {
-    const hasPending = this.jobs.some(
-      (j) => j.status === 'queued' || j.status === 'running'
-    );
+    const hasPending = this.jobs.some((job) => isPending(job.status));
     if (!hasPending && this.activeCount === 0) {
       return Promise.resolve();
     }
@@ -104,88 +115,157 @@ export class ReviewJobQueue<TPayload = unknown, TResult = unknown> {
   }
 
   private drain(): void {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     while (this.activeCount < this.concurrency) {
-      // Oldest queued job first (since jobs are unshifted)
-      const next = [...this.jobs].reverse().find((j) => j.status === 'queued');
-      if (!next) break;
-      this.runJob(next);
+      const now = Date.now();
+      let next: ReviewJob<TPayload, TResult> | undefined;
+      let earliestRetry = Infinity;
+      // Pick the oldest job eligible to run.
+      for (let i = this.jobs.length - 1; i >= 0; i--) {
+        const job = this.jobs[i];
+        if (job.status !== 'queued') continue;
+        const readyAt = job.nextAttemptAt ? Date.parse(job.nextAttemptAt) : now;
+        if (readyAt <= now) {
+          next = job;
+          break;
+        }
+        earliestRetry = Math.min(earliestRetry, readyAt);
+      }
+      if (!next) {
+        if (Number.isFinite(earliestRetry)) {
+          const delay = Math.min(MAX_TIMER_DELAY_MS, Math.max(0, earliestRetry - Date.now()));
+          this.retryTimer = setTimeout(() => this.drain(), delay);
+        }
+        break;
+      }
+      void this.runJob(next);
     }
     this.checkIdle();
   }
 
-  private runJob(job: ReviewJob<TPayload, TResult>): void {
+  private async runJob(job: ReviewJob<TPayload, TResult>): Promise<void> {
     this.activeCount++;
     job.status = 'running';
     job.attempts += 1;
-    job.startedAt = job.startedAt || new Date().toISOString();
     job.updatedAt = new Date().toISOString();
-    this.persistToDisk();
+    job.startedAt ??= job.updatedAt;
+    job.nextAttemptAt = undefined;
+    this.saveProgress();
 
-    this.processor(job)
-      .then((result) => {
-        job.status = 'completed';
-        job.result = result;
-        job.completedAt = new Date().toISOString();
-        job.updatedAt = job.completedAt;
-        job.error = undefined;
-        this.persistToDisk();
-      })
-      .catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        job.error = message;
-        job.updatedAt = new Date().toISOString();
-        if (job.attempts < job.maxAttempts) {
-          job.status = 'queued';
-          this.persistToDisk();
-          const delay = this.retryDelayMs * Math.pow(2, job.attempts - 1);
-          setTimeout(() => this.drain(), delay);
-          return;
-        }
+    try {
+      job.result = await Promise.resolve().then(() => this.processor(job));
+      job.status = 'completed';
+      job.completedAt = new Date().toISOString();
+      job.updatedAt = job.completedAt;
+      job.error = undefined;
+    } catch (error) {
+      const now = Date.now();
+      job.error = error instanceof Error ? error.message : String(error);
+      job.updatedAt = new Date(now).toISOString();
+      if (job.attempts < job.maxAttempts) {
+        const delay = this.retryDelayMs === 0 ? 0
+          : Math.min(MAX_TIMER_DELAY_MS, this.retryDelayMs * 2 ** (job.attempts - 1));
+        job.status = 'queued';
+        job.nextAttemptAt = new Date(now + delay).toISOString();
+      } else {
         job.status = 'failed';
         job.completedAt = job.updatedAt;
-        this.persistToDisk();
-      })
-      .finally(() => {
-        this.activeCount--;
-        this.drain();
-      });
+      }
+    } finally {
+      this.pruneHistory();
+      this.saveProgress();
+      this.activeCount--;
+      this.drain();
+    }
   }
 
   private checkIdle(): void {
-    const hasPending = this.jobs.some(
-      (j) => j.status === 'queued' || j.status === 'running'
-    );
+    const hasPending = this.jobs.some((job) => isPending(job.status));
     if (!hasPending && this.activeCount === 0 && this.idleResolvers.length > 0) {
       const resolvers = this.idleResolvers.splice(0);
       for (const resolve of resolvers) resolve();
     }
   }
 
+  private pruneHistory(): void {
+    let finished = 0;
+    this.jobs = this.jobs.filter((job) => isPending(job.status) || ++finished <= HISTORY_LIMIT);
+  }
+
   private loadFromDisk(): void {
-    if (!this.persistPath || !fs.existsSync(this.persistPath)) return;
+    if (!this.persistPath) return;
     try {
       const raw = fs.readFileSync(this.persistPath, 'utf8');
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        this.jobs = parsed.map((j: ReviewJob<TPayload, TResult>) =>
-          j.status === 'running' ? { ...j, status: 'queued' } : j
-        );
+      if (!Array.isArray(parsed) || parsed.some((job) =>
+        !job || typeof job.id !== 'string' || typeof job.key !== 'string' ||
+        !['queued', 'running', 'completed', 'failed'].includes(job.status) ||
+        !Number.isInteger(job.attempts) || job.attempts < 0 ||
+        !Number.isFinite(job.maxAttempts) || job.maxAttempts < 1 ||
+        (job.nextAttemptAt !== undefined &&
+          (typeof job.nextAttemptAt !== 'string' || !Number.isFinite(Date.parse(job.nextAttemptAt))))
+      )) {
+        throw new Error('Invalid saved job records.');
       }
-    } catch {
-      // Ignore corrupt job store on startup
+      this.jobs = parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw new JobQueuePersistenceError('Could not load the webhook job queue.', { cause: error });
+    }
+
+    const now = new Date().toISOString();
+    let recovered = false;
+    for (const job of this.jobs) {
+      if (!isPending(job.status)) continue;
+      if (job.attempts >= job.maxAttempts) {
+        job.status = 'failed';
+        job.updatedAt = now;
+        job.completedAt = now;
+        job.nextAttemptAt = undefined;
+        job.error = 'Review was interrupted after using its allowed attempts.';
+        recovered = true;
+      } else if (job.status === 'running') {
+        job.status = 'queued';
+        job.updatedAt = now;
+        job.nextAttemptAt = undefined;
+        recovered = true;
+      }
+    }
+    const count = this.jobs.length;
+    this.pruneHistory();
+    if (recovered || this.jobs.length !== count) this.persistToDisk(this.jobs);
+  }
+
+  private saveProgress(): void {
+    try {
+      this.persistToDisk(this.jobs);
+    } catch (error) {
+      // A checkpoint failure must not cause a successful processor to be retried.
+      console.error('[OpenRabbit] Failed to checkpoint webhook job progress:', error);
     }
   }
 
-  private persistToDisk(): void {
+  private persistToDisk(jobs: ReviewJob<TPayload, TResult>[]): void {
     if (!this.persistPath) return;
+    const tempPath = `${this.persistPath}.${crypto.randomUUID()}.tmp`;
     try {
-      const dir = path.dirname(this.persistPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(path.dirname(this.persistPath), { recursive: true });
+      const file = fs.openSync(tempPath, 'wx', 0o600);
+      try {
+        fs.writeFileSync(file, JSON.stringify(jobs, null, 2), 'utf8');
+        fs.fsyncSync(file);
+      } finally {
+        fs.closeSync(file);
       }
-      fs.writeFileSync(this.persistPath, JSON.stringify(this.jobs, null, 2), 'utf8');
-    } catch {
-      // Non-fatal persistence error
+      fs.renameSync(tempPath, this.persistPath);
+    } catch (error) {
+      try {
+        fs.rmSync(tempPath, { force: true });
+      } catch {
+        // Preserve the original storage error.
+      }
+      throw new JobQueuePersistenceError('Could not persist the webhook job queue.', { cause: error });
     }
   }
 }
