@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 import {
   browseFilesystem,
   findSubrepos,
@@ -23,6 +23,23 @@ import {
   ReviewStore,
   SAMPLE_DIFF_TEMPLATES,
 } from '../src/storage/review-store.js';
+
+function createCommitFixture(t: TestContext): string {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openrabbit-commit-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = path.join(directory, 'repo');
+  fs.mkdirSync(repository);
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repository, stdio: 'ignore' });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'OpenRabbit Tests']);
+  git(['config', 'user.email', 'tests@example.test']);
+  git(['config', 'core.autocrlf', 'false']);
+  git(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repository, 'queue.ts'), 'export const retries = 1;\n');
+  git(['add', 'queue.ts']);
+  git(['commit', '-m', 'Add queue retry default']);
+  return repository;
+}
 
 describe('Local Repositories & Integrations Suite', () => {
   it('validates local git repositories and extracts rich metadata', () => {
@@ -50,9 +67,10 @@ describe('Local Repositories & Integrations Suite', () => {
     }
   });
 
-  it('lists commits and extracts individual commit unified diffs', () => {
-    const commits = getRepoCommits(process.cwd(), { maxCount: 5 });
-    assert.ok(commits.length > 0);
+  it('lists commits and extracts individual commit unified diffs', (t) => {
+    const repository = createCommitFixture(t);
+    const commits = getRepoCommits(repository, { maxCount: 5 });
+    assert.equal(commits.length, 1);
     const first = commits[0];
 
     assert.ok(first.sha.length >= 40);
@@ -62,23 +80,23 @@ describe('Local Repositories & Integrations Suite', () => {
     assert.ok(typeof first.filesChanged === 'number');
 
     // Retrieve diff for this commit
-    const commitData = getCommitDiff(process.cwd(), first.sha);
+    const commitData = getCommitDiff(repository, first.sha);
     assert.equal(commitData.commit.sha, first.sha);
     assert.equal(commitData.commit.shortSha, first.shortSha);
-    assert.ok(typeof commitData.diff === 'string');
+    assert.match(commitData.diff, /\+export const retries = 1;/);
 
     // Test getLocalGitDiff with commitSha option
     const localCommitDiff = getLocalGitDiff({
-      cwd: process.cwd(),
+      cwd: repository,
       commitSha: first.sha,
     });
-    assert.ok(localCommitDiff.diff);
+    assert.equal(localCommitDiff.diff.trim(), commitData.diff.trim());
     assert.equal(localCommitDiff.commitSha, first.sha);
-    assert.equal(getCommitDiff(process.cwd(), 'HEAD').commit.sha, first.sha);
-    assert.throws(() => getCommitDiff(process.cwd(), 'missing-ref-for-test'), /Invalid commit reference/);
-    assert.throws(() => getCommitRangeDiff(process.cwd(), 'missing-ref-for-test..HEAD'), /Invalid or unavailable/);
-    assert.throws(() => getCommitRangeDiff(process.cwd(), 'HEAD;echo test'), /Invalid commit range/);
-    const emptyRange = getCommitRangeDiff(process.cwd(), 'HEAD..HEAD');
+    assert.equal(getCommitDiff(repository, 'HEAD').commit.sha, first.sha);
+    assert.throws(() => getCommitDiff(repository, 'missing-ref-for-test'), /Invalid commit reference/);
+    assert.throws(() => getCommitRangeDiff(repository, 'missing-ref-for-test..HEAD'), /Invalid or unavailable/);
+    assert.throws(() => getCommitRangeDiff(repository, 'HEAD;echo test'), /Invalid commit range/);
+    const emptyRange = getCommitRangeDiff(repository, 'HEAD..HEAD');
     assert.equal(emptyRange.diff, '');
     assert.equal(emptyRange.count, 0);
   });
@@ -115,11 +133,12 @@ describe('Local Repositories & Integrations Suite', () => {
     }
   });
 
-  it('provides REST API endpoints for repository management, commits, and commit reviews', async () => {
+  it('provides REST API endpoints for repository management, commits, and commit reviews', async (t) => {
+    const repository = createCommitFixture(t);
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openrabbit-api-repos-'));
     const serverInstance = await createOpenRabbitServer({
       port: 0,
-      workspaceDir: process.cwd(),
+      workspaceDir: repository,
       storageDir: tmpDir,
     });
 
@@ -137,7 +156,7 @@ describe('Local Repositories & Integrations Suite', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          path: process.cwd(),
+          path: repository,
           name: 'My Workspace Repo',
         }),
       }).then((r) => r.json());
