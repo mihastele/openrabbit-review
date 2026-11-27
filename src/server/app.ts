@@ -30,7 +30,7 @@ import {
   resolveActiveProvider,
 } from '../core/llm-provider.js';
 import { runPullRequestReview } from '../core/review-engine.js';
-import { ReviewJobQueue } from '../core/job-queue.js';
+import { JobQueuePersistenceError, ReviewJobQueue } from '../core/job-queue.js';
 import { buildRepositorySecurityDiff } from '../core/repository-security-scan.js';
 import { exceedsFailureThreshold, formatSarifReport, type FailureThreshold } from '../core/sarif-formatter.js';
 import {
@@ -189,6 +189,7 @@ export async function createOpenRabbitServer(options: {
     return result;
   };
 
+  const retryDelayMs = Number(process.env.OPENRABBIT_RETRY_DELAY_MS || 1000);
   const jobQueue = new ReviewJobQueue<WebhookJobPayload, { handled: boolean; message?: string; reviewResult?: any }>({
     concurrency: Math.max(
       1,
@@ -198,10 +199,7 @@ export async function createOpenRabbitServer(options: {
       1,
       Math.min(5, Number(process.env.OPENRABBIT_JOB_MAX_ATTEMPTS || 3) || 3)
     ),
-    retryDelayMs: Math.max(
-      0,
-      Number(process.env.OPENRABBIT_RETRY_DELAY_MS || 1000) || 1000
-    ),
+    retryDelayMs: Number.isFinite(retryDelayMs) ? retryDelayMs : 1000,
     persistPath: path.join(resolvedStorageDir, 'jobs.json'),
     processor: async (job) => executeWebhook(job.payload),
   });
@@ -1346,6 +1344,13 @@ export async function createOpenRabbitServer(options: {
     } catch (err) {
       if (err instanceof RequestError) {
         sendJson(res, err.status, { error: err.message });
+        return;
+      }
+      if (err instanceof JobQueuePersistenceError) {
+        console.error('[OpenRabbit Server Error]', err);
+        sendJson(res, 503, {
+          error: 'Webhook job storage is unavailable. Redeliver the webhook after storage recovers.',
+        });
         return;
       }
       console.error('[OpenRabbit Server Error]', err);

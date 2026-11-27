@@ -87,6 +87,21 @@ curl -fsS http://127.0.0.1:3847/api/jobs
 Authenticated browser sessions use an HttpOnly cookie. Direct API requests need
 that cookie; this project does not expose provider tokens through the API.
 
+The async webhook endpoint returns HTTP 202 after saving the job. If saving
+fails and the endpoint returns HTTP 503, restore writable queue storage and
+redeliver the webhook.
+
+Pending jobs resume when the service starts. Retries use exponential backoff
+starting at `OPENRABBIT_RETRY_DELAY_MS`. The `nextAttemptAt` time shown by the jobs API
+survives a restart.
+An interrupted attempt counts toward `OPENRABBIT_JOB_MAX_ATTEMPTS`. If it was the
+last allowed attempt, the job appears as failed. If the process stops after a
+provider write, a resumed attempt can repeat that write.
+
+The queue keeps every pending job and up to 200 completed or failed jobs. If the
+saved queue cannot be read on startup, restore a valid `jobs.json` from backup
+before restarting the service.
+
 ## Data locations
 
 - `data/reviews.json` — review results and source diff metadata
