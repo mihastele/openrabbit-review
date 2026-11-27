@@ -68,6 +68,7 @@ it('publishes a fork review using the exact commits and the CI run head', async 
     { path: '/pulls/7', response: Response.json(pr) },
     { path: '/issues/7/comments', method: 'POST', response: Response.json({ id: 11 }) },
     { path: '/pulls/7/reviews?per_page=100', response: Response.json([]) },
+    { path: '/pulls/7/comments?per_page=100', response: Response.json([]) },
     { path: '/pulls/7', response: Response.json(pr) },
     {
       path: '/pulls/7/reviews',

@@ -67,6 +67,11 @@ The same URL and event list appear in **Settings → Connections** in the dashbo
   publisher's walkthrough and submitted inline review before writing. Once
   GitHub exposes an accepted write in its API, a retry reuses it. A different
   base or head commit is a new review snapshot.
+- Across pushes, a finding keeps its existing inline comment when GitHub maps
+  it to the same source in the current diff and the finding identity and
+  severity still match. New occurrences, changed evidence, and outdated
+  comments can get fresh inline feedback. Older comments without a finding
+  fingerprint may be posted once more after an upgrade.
 - Failures are visible as failed jobs; redeliver after fixing the cause.
 
 ## GitHub Actions review

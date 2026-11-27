@@ -157,6 +157,7 @@ it('reviews a fork ref in the base repository and publishes against the verified
     { path: pullPath, response: Response.json(pr) },
     { path: '/issues/7/comments', method: 'POST', response: Response.json({ id: 11 }) },
     { path: '/pulls/7/reviews?per_page=100', response: Response.json([]) },
+    { path: '/pulls/7/comments?per_page=100', response: Response.json([]) },
     { path: pullPath, response: Response.json(pr) },
     {
       path: '/pulls/7/reviews',
@@ -201,6 +202,7 @@ it('reports a posted walkthrough and skips inline comments if the head changes b
     { path: pullPath, response: Response.json(pr) },
     { path: '/issues/7/comments', method: 'POST', response: Response.json({ id: 11 }) },
     { path: '/pulls/7/reviews?per_page=100', response: Response.json([]) },
+    { path: '/pulls/7/comments?per_page=100', response: Response.json([]) },
     { path: pullPath, response: Response.json(pullRequest(newSha)) },
   );
   const result = await handleGitHubWebhookEvent('pull_request', webhook(head));

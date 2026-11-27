@@ -17,6 +17,18 @@ export interface PreparedInlineReview {
 
 export interface PrepareInlineCommentsOptions {
   maxComments?: number;
+  alreadyPublished?: (finding: InlineFinding, evidence: string[]) => boolean;
+}
+
+function readAnchorCode(finding: InlineFinding, lines?: Map<number, string>): string[] {
+  if (!lines || !Number.isSafeInteger(finding.startLine) || !Number.isSafeInteger(finding.endLine)) return [];
+  const evidence: string[] = [];
+  for (let line = finding.startLine; line <= finding.endLine; line++) {
+    const content = lines.get(line);
+    if (content === undefined) return [];
+    evidence.push(content);
+  }
+  return evidence;
 }
 
 /**
@@ -47,12 +59,12 @@ export function prepareInlineComments(
       diffFiles = [];
     }
   }
-  const diffLinesByFile = new Map<string, Set<number>>();
+  const diffLinesByFile = new Map<string, Map<number, string>>();
   for (const file of diffFiles) {
-    const lines = new Set<number>();
+    const lines = new Map<number, string>();
     for (const hunk of file.hunks) {
       for (const line of hunk.lines) {
-        if (line.newLineNumber !== undefined) lines.add(line.newLineNumber);
+        if (line.newLineNumber !== undefined) lines.set(line.newLineNumber, line.content);
       }
     }
     diffLinesByFile.set(file.newPath, lines);
@@ -94,12 +106,18 @@ export function prepareInlineComments(
       endLine = finding.startLine;
     }
 
+    const anchored = endLine === finding.endLine ? finding : { ...finding, endLine };
+    if (options?.alreadyPublished?.(anchored, readAnchorCode(anchored, validLines))) {
+      skipped.push({ finding: anchored, reason: 'already-commented' });
+      continue;
+    }
+
     if (comments.length >= maxComments) {
       skipped.push({ finding, reason: 'comment-cap' });
       continue;
     }
 
-    comments.push(endLine === finding.endLine ? finding : { ...finding, endLine });
+    comments.push(anchored);
   }
 
   return { comments, skipped };
