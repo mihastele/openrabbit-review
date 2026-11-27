@@ -55,6 +55,20 @@ The same URL and event list appear in **Settings → Connections** in the dashbo
 - The walkthrough is a single sticky comment updated on later commits.
 - Failures are visible as failed jobs; redeliver after fixing the cause.
 
+## GitHub Actions review
+
+OpenRabbit's own repository runs read-only CI on pull requests. After CI passes,
+a separate workflow runs the reviewer from the default branch. It uses the
+default branch's OpenRabbit configuration and compares the PR's base and head
+commits through the GitHub API. It rechecks both commits before posting a
+walkthrough and any inline findings.
+
+The publisher receives the GitHub Actions token and any configured OpenAI,
+Anthropic, or Gemini secrets. Without a model key, it uses the built-in review
+engine. GitHub enables the publisher once its workflow is on the repository's
+default branch. The **Checks** status is the aggregate CI check for branch
+rules. Use the webhook integration for PR chat and checkout-based review context.
+
 ## Common errors
 
 ### 401 from OpenRabbit

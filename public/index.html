@@ -1165,25 +1165,10 @@ npx openrabbit review --gitlab project/id#45
 # 4. Review a remote Bitbucket PR on demand
 npx openrabbit review --bitbucket workspace/repo#78</pre>
 
-          <h3 style="margin: 16px 0 8px; font-size: 0.95rem;"><code>.github/workflows/openrabbit.yml</code></h3>
-          <pre class="code-preview">name: OpenRabbit AI PR Review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-jobs:
-  openrabbit-review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm ci
-      - run: npx openrabbit review --base origin/${{ github.base_ref }} --post-github ${{ github.repository }}#${{ github.event.pull_request.number }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}</pre>
+          <p class="card-subtitle" style="margin-top: 16px;">
+            See the <a href="https://github.com/mihastele/openrabbit-review/blob/main/docs/integrations/github.md#github-actions-review">GitHub Actions review setup</a>
+            for separate CI and review publishing workflows.
+          </p>
         </div>
       </div>
     </main>

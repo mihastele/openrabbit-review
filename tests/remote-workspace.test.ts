@@ -3,16 +3,19 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { withRemoteWorkspace } from '../src/core/remote-workspace.js';
 
-function createRepository(): string {
+function createRepository(t: TestContext): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openrabbit-remote-origin-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const work = path.join(root, 'work');
   fs.mkdirSync(work);
   execFileSync('git', ['init', '-b', 'main'], { cwd: work, stdio: 'ignore' });
   execFileSync('git', ['config', 'user.email', 'dev@example.com'], { cwd: work });
   execFileSync('git', ['config', 'user.name', 'Dev'], { cwd: work });
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: work });
   fs.writeFileSync(path.join(work, 'sample.ts'), 'export const ok = true;\n');
   execFileSync('git', ['add', '.'], { cwd: work });
   execFileSync('git', ['commit', '-m', 'initial'], { cwd: work, stdio: 'ignore' });
@@ -20,12 +23,12 @@ function createRepository(): string {
 }
 
 describe('Remote workspace safety', () => {
-  it('checks out a ref and removes the temporary workspace afterwards', async () => {
-    const origin = createRepository();
+  it('checks out a ref and removes the temporary workspace afterwards', async (t) => {
+    const origin = createRepository(t);
     let checkedOutPath = '';
     await withRemoteWorkspace(
       {
-        cloneUrl: `file://${origin}`,
+        cloneUrl: pathToFileURL(origin).href,
         ref: 'refs/heads/main',
         providerHost: 'example.invalid',
         allowFileProtocol: true,
@@ -33,22 +36,21 @@ describe('Remote workspace safety', () => {
       async (workspace) => {
         checkedOutPath = workspace.path;
         assert.equal(
-          fs.readFileSync(path.join(checkedOutPath, 'sample.ts'), 'utf8'),
+          fs.readFileSync(path.join(checkedOutPath, 'sample.ts'), 'utf8').replace(/\r\n/g, '\n'),
           'export const ok = true;\n'
         );
       }
     );
     assert.equal(fs.existsSync(checkedOutPath), false);
-    fs.rmSync(origin, { recursive: true, force: true });
   });
 
-  it('cleans up when the callback throws', async () => {
-    const origin = createRepository();
+  it('cleans up when the callback throws', async (t) => {
+    const origin = createRepository(t);
     let checkedOutPath = '';
     await assert.rejects(
       withRemoteWorkspace(
         {
-          cloneUrl: `file://${origin}`,
+          cloneUrl: pathToFileURL(origin).href,
           ref: 'refs/heads/main',
           providerHost: 'example.invalid',
           allowFileProtocol: true,
@@ -61,7 +63,6 @@ describe('Remote workspace safety', () => {
       /review failed/
     );
     assert.equal(fs.existsSync(checkedOutPath), false);
-    fs.rmSync(origin, { recursive: true, force: true });
   });
 
   it('rejects untrusted HTTPS hosts before running Git', async () => {
