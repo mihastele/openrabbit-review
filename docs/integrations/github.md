@@ -51,6 +51,13 @@ The same URL and event list appear in **Settings → Connections** in the dashbo
 - Draft PRs are skipped unless `reviews.auto_review.drafts` is true.
 - Base branches must be in `reviews.auto_review.base_branches` unless that list is
   empty.
+- Webhook and on-demand PR reviews read repository configuration from the
+  reviewed base commit when a token is configured. The review uses the exact
+  base and head commits, with a verified checkout of the head for context.
+- Queued webhook events for an older head are skipped. Within one server
+  process, OpenRabbit publishes one review per PR at a time and checks the PR
+  before posting the walkthrough and inline findings. An on-demand publishing
+  request returns HTTP 409 if the PR changes during review.
 - A repeated delivery ID is deduplicated.
 - The walkthrough is a single sticky comment updated on later commits.
 - Failures are visible as failed jobs; redeliver after fixing the cause.

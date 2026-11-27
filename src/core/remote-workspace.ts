@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 export interface RemoteWorkspaceOptions {
   cloneUrl: string;
   ref: string;
+  expectedCommit?: string;
   providerHost: string;
   auth?: { username: string; password: string };
   timeoutMs?: number;
@@ -19,6 +20,8 @@ export interface RemoteWorkspaceOptions {
 export interface RemoteWorkspace {
   path: string;
 }
+
+export class RemoteWorkspaceRefChangedError extends Error {}
 
 function validateRemoteUrl(options: RemoteWorkspaceOptions): URL {
   let url: URL;
@@ -61,14 +64,15 @@ async function git(
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMs: number
-): Promise<void> {
+): Promise<string> {
   try {
-    await execFileAsync('git', args, {
+    const { stdout } = await execFileAsync('git', args, {
       cwd,
       env,
       timeout: timeoutMs,
       maxBuffer: 4 * 1024 * 1024,
     });
+    return stdout;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Remote Git checkout failed: ${message.split('\n')[0]}`);
@@ -81,6 +85,10 @@ export async function withRemoteWorkspace<T>(
 ): Promise<T> {
   validateRemoteUrl(options);
   validateRef(options.ref);
+  const expectedCommit = options.expectedCommit?.toLowerCase();
+  if (expectedCommit !== undefined && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedCommit)) {
+    throw new Error('Expected a full remote Git commit SHA');
+  }
 
   const timeoutMs = Math.max(1_000, options.timeoutMs ?? 60_000);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openrabbit-remote-'));
@@ -119,7 +127,14 @@ export async function withRemoteWorkspace<T>(
       env,
       timeoutMs
     );
-    await git(['checkout', '--quiet', '--detach', 'FETCH_HEAD'], repoPath, env, timeoutMs);
+    let checkoutRef = 'FETCH_HEAD';
+    if (expectedCommit) {
+      checkoutRef = (await git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'], repoPath, env, timeoutMs)).trim();
+      if (checkoutRef !== expectedCommit) {
+        throw new RemoteWorkspaceRefChangedError('Remote Git ref moved before checkout.');
+      }
+    }
+    await git(['checkout', '--quiet', '--detach', checkoutRef], repoPath, env, timeoutMs);
     return await callback({ path: repoPath });
   } catch (error) {
     if (options.auth?.password && error instanceof Error) {

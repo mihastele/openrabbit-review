@@ -45,6 +45,7 @@ import {
   verifyBitbucketWebhook,
 } from '../integrations/bitbucket.js';
 import {
+  GitHubPRChangedError,
   handleGitHubWebhookEvent,
   runGitHubOnDemandReview,
   verifyGitHubWebhookSignature,
@@ -1035,7 +1036,7 @@ export async function createOpenRabbitServer(options: {
           const analytics = await store.getAnalyticsSummary();
           sendJson(res, 200, { review, parsedDiff, analytics });
         } catch (err) {
-          sendJson(res, 400, { error: (err as Error).message });
+          sendJson(res, err instanceof GitHubPRChangedError ? 409 : 400, { error: (err as Error).message });
         }
         return;
       }
