@@ -1,6 +1,6 @@
 import { runPullRequestReview } from '../core/review-engine.js';
 import type { OpenRabbitConfig } from '../types/index.js';
-import { fetchGitHubCompareDiff, postGitHubInlineReview, upsertGitHubWalkthroughComment } from './github.js';
+import { fetchGitHubCompareDiff, GitHubPRChangedError, publishGitHubPRReview } from './github.js';
 
 interface WorkflowRun {
   event?: string;
@@ -116,15 +116,21 @@ export async function reviewGitHubWorkflowRun({
     config,
   });
 
-  const latest = await getPullRequest(pr.number);
-  if (!matchesOpenHead(latest) || latest.base.sha !== baseSha ||
-      latest.base.ref !== pr.base.ref || (!policy.drafts && latest.draft)) {
-    return 'Skipped publication because the PR changed during review.';
-  }
-
-  await upsertGitHubWalkthroughComment(owner, repo, pr.number, review.markdownWalkthrough, token);
-  if (review.findings.length > 0) {
-    await postGitHubInlineReview(owner, repo, pr.number, headSha, review.findings, token, { rawDiff });
+  try {
+    await publishGitHubPRReview(
+      { owner, repo, pullNumber: pr.number, token },
+      { baseSha, headSha },
+      review,
+      async () => {
+        const latest = await getPullRequest(pr.number);
+        return matchesOpenHead(latest) && latest.base.sha === baseSha &&
+          latest.base.ref === pr.base.ref && (policy.drafts || !latest.draft);
+      },
+      'github-actions[bot]'
+    );
+  } catch (error) {
+    if (error instanceof GitHubPRChangedError) return error.message;
+    throw error;
   }
   return 'Published OpenRabbit review for PR #' + pr.number + '.';
 }

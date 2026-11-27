@@ -23,6 +23,9 @@ GITHUB_API_URL=https://api.github.com
 
 For GitHub Enterprise, set `GITHUB_API_URL` to the instance API endpoint and, if
 needed, `GITHUB_WEB_HOST` to the web clone hostname.
+If you supply a GitHub App installation token, set `GITHUB_BOT_LOGIN` to the
+app's bot login, such as `openrabbit[bot]`. Personal access tokens use the
+identity GitHub returns for the authenticated user.
 
 ## 2. Create the webhook
 
@@ -60,6 +63,10 @@ The same URL and event list appear in **Settings → Connections** in the dashbo
   request returns HTTP 409 if the PR changes during review.
 - A repeated delivery ID is deduplicated.
 - The walkthrough is a single sticky comment updated on later commits.
+- Webhook, on-demand, and Actions publishing check GitHub for the same
+  publisher's walkthrough and submitted inline review before writing. Once
+  GitHub exposes an accepted write in its API, a retry reuses it. A different
+  base or head commit is a new review snapshot.
 - Failures are visible as failed jobs; redeliver after fixing the cause.
 
 ## GitHub Actions review

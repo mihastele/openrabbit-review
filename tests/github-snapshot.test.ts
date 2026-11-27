@@ -69,6 +69,7 @@ function createFixture(t: TestContext): string {
     GIT_CONFIG_GLOBAL: gitConfig,
     GIT_CONFIG_NOSYSTEM: '1',
     GITHUB_TOKEN: 'test-token',
+    GITHUB_BOT_LOGIN: '',
     GITHUB_WEB_HOST: 'fixture.invalid',
     GITHUB_API_URL: 'https://api.fixture.invalid',
     OPENRABBIT_DATA_DIR: path.join(directory, 'data'),
@@ -102,7 +103,8 @@ function mockGitHub(t: TestContext, ...requests: ExpectedRequest[]) {
     const url = new URL(input);
     const expected = requests.shift();
     assert.ok(expected, 'Unexpected GitHub request: ' + url.pathname);
-    assert.equal(url.pathname + url.search, '/repos/' + repository + expected.path);
+    const prefix = expected.path === '/user' ? '' : '/repos/' + repository;
+    assert.equal(url.pathname + url.search, prefix + expected.path);
     assert.equal(options.method ?? 'GET', expected.method ?? 'GET');
     expected.check?.(options);
     return expected.response;
@@ -117,6 +119,11 @@ function configRequest(response = new Response('llm:\n  provider: heuristic\n'))
 const compareRequest = (head: string): ExpectedRequest => ({
   path: '/compare/' + baseSha + '...' + head,
   response: new Response(diff),
+});
+
+const publisherRequest = (): ExpectedRequest => ({
+  path: '/user',
+  response: Response.json({ login: 'review-bot' }),
 });
 
 it('skips an old webhook before reading config, fetching a diff, or posting', async (t) => {
@@ -145,9 +152,11 @@ it('reviews a fork ref in the base repository and publishes against the verified
     { path: pullPath, response: Response.json(pr) },
     configRequest(),
     compareRequest(head),
-    { path: pullPath, response: Response.json(pr) },
+    publisherRequest(),
     { path: '/issues/7/comments?per_page=100', response: Response.json([]) },
+    { path: pullPath, response: Response.json(pr) },
     { path: '/issues/7/comments', method: 'POST', response: Response.json({ id: 11 }) },
+    { path: '/pulls/7/reviews?per_page=100', response: Response.json([]) },
     { path: pullPath, response: Response.json(pr) },
     {
       path: '/pulls/7/reviews',
@@ -187,9 +196,11 @@ it('reports a posted walkthrough and skips inline comments if the head changes b
     { path: pullPath, response: Response.json(pr) },
     configRequest(),
     compareRequest(head),
-    { path: pullPath, response: Response.json(pr) },
+    publisherRequest(),
     { path: '/issues/7/comments?per_page=100', response: Response.json([]) },
+    { path: pullPath, response: Response.json(pr) },
     { path: '/issues/7/comments', method: 'POST', response: Response.json({ id: 11 }) },
+    { path: '/pulls/7/reviews?per_page=100', response: Response.json([]) },
     { path: pullPath, response: Response.json(pullRequest(newSha)) },
   );
   const result = await handleGitHubWebhookEvent('pull_request', webhook(head));
@@ -205,6 +216,8 @@ it('rejects on-demand publication when the base moves during review', async (t) 
     { path: pullPath, response: Response.json(pr) },
     configRequest(),
     compareRequest(head),
+    publisherRequest(),
+    { path: '/issues/7/comments?per_page=100', response: Response.json([]) },
     { path: pullPath, response: Response.json({ ...pr, base: { ...pr.base, sha: newSha } }) },
   );
   await assert.rejects(runGitHubOnDemandReview({

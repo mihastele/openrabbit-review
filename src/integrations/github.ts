@@ -169,62 +169,110 @@ export async function fetchGitHubCompareDiff(
   return res.text();
 }
 
-export async function upsertGitHubWalkthroughComment(
-  owner: string,
-  repo: string,
-  pullNumber: number,
-  markdownBody: string,
-  token: string
-): Promise<{ commentId: number; updated: boolean }> {
-  const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(
-    /\/$/,
-    ''
-  );
-  const headers: Record<string, string> = {
+interface GitHubPublication {
+  id: number;
+  body?: string | null;
+  user?: { login: string } | null;
+}
+
+interface GitHubInlinePublication extends GitHubPublication {
+  state: string;
+  commit_id?: string;
+}
+
+function gitHubPublishHeaders(token: string): Record<string, string> {
+  return {
     Accept: 'application/vnd.github+json',
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
     'User-Agent': 'OpenRabbit-Bot/1.0',
   };
+}
 
-  // Check if a sticky walkthrough comment already exists
-  const listRes = await fetch(
-    `${apiUrl}/repos/${owner}/${repo}/issues/${pullNumber}/comments?per_page=100`,
-    { headers }
-  );
-  if (listRes.ok) {
-    const comments = (await listRes.json()) as any[];
-    const existing = comments.find(
-      (c) => typeof c.body === 'string' && c.body.includes(WALKTHROUGH_COMMENT_MARKER)
-    );
-    if (existing) {
-      const patchRes = await fetch(
-        `${apiUrl}/repos/${owner}/${repo}/issues/comments/${existing.id}`,
-        {
-          method: 'PATCH',
-          headers,
-          body: JSON.stringify({ body: markdownBody }),
-        }
-      );
-      if (!patchRes.ok) {
-        throw new Error(`Failed to update walkthrough comment (${patchRes.status})`);
-      }
-      return { commentId: existing.id, updated: true };
+async function findGitHubPublication<T>(
+  endpoint: string,
+  headers: Record<string, string>,
+  matches: (publication: T) => boolean
+): Promise<T | undefined> {
+  for (let page = 1; ; page++) {
+    const suffix = page === 1 ? '?per_page=100' : `?per_page=100&page=${page}`;
+    const response = await fetch(endpoint + suffix, { headers, signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) {
+      throw new Error(`Failed to list GitHub publications (${response.status}).`);
     }
+    const publications: T[] = await response.json();
+    const found = publications.find(matches);
+    if (found || !response.headers.get('link')?.includes('rel="next"')) return found;
+  }
+}
+
+async function resolveGitHubPublisher(token: string): Promise<string> {
+  const configuredLogin = process.env.GITHUB_BOT_LOGIN?.trim();
+  if (configuredLogin) return configuredLogin;
+  const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
+  const response = await fetch(`${apiUrl}/user`, {
+    headers: gitHubPublishHeaders(token),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to identify GitHub publisher (${response.status}). Set GITHUB_BOT_LOGIN when using an installation token.`);
+  }
+  const user: { login?: string } = await response.json();
+  if (!user.login) throw new Error('GitHub did not return the publisher login.');
+  return user.login;
+}
+
+function isOwnedPublication(publication: GitHubPublication, actorLogin: string): boolean {
+  return publication.user?.login?.toLowerCase() === actorLogin.toLowerCase();
+}
+
+export async function upsertGitHubWalkthroughComment(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  markdownBody: string,
+  token: string,
+  options?: { actorLogin: string; ensureCurrent: () => Promise<void> }
+): Promise<{ commentId: number; updated: boolean }> {
+  const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(
+    /\/$/,
+    ''
+  );
+  const headers = gitHubPublishHeaders(token);
+  const endpoint = `${apiUrl}/repos/${owner}/${repo}/issues/${pullNumber}/comments`;
+  const existing = await findGitHubPublication<GitHubPublication>(
+    endpoint, headers,
+    (comment) => Boolean(comment.body?.startsWith(WALKTHROUGH_COMMENT_MARKER)) &&
+      (!options || isOwnedPublication(comment, options.actorLogin))
+  );
+  await options?.ensureCurrent();
+  if (existing) {
+    if (existing.body === markdownBody) return { commentId: existing.id, updated: false };
+    const patchRes = await fetch(
+      `${apiUrl}/repos/${owner}/${repo}/issues/comments/${existing.id}`,
+      {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ body: markdownBody }),
+        signal: AbortSignal.timeout(30_000),
+      }
+    );
+    if (!patchRes.ok) {
+      throw new Error(`Failed to update walkthrough comment (${patchRes.status})`);
+    }
+    return { commentId: existing.id, updated: true };
   }
 
-  const createRes = await fetch(
-    `${apiUrl}/repos/${owner}/${repo}/issues/${pullNumber}/comments`,
-    {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ body: markdownBody }),
-    }
-  );
+  const createRes = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ body: markdownBody }),
+    signal: AbortSignal.timeout(30_000),
+  });
   if (!createRes.ok) {
     throw new Error(`Failed to post walkthrough comment (${createRes.status})`);
   }
-  const created = (await createRes.json()) as any;
+  const created: GitHubPublication = await createRes.json();
   return { commentId: created.id, updated: false };
 }
 
@@ -235,18 +283,18 @@ export async function postGitHubInlineReview(
   commitSha: string,
   findings: InlineFinding[],
   token: string,
-  options?: { rawDiff?: string; maxComments?: number }
+  options?: {
+    rawDiff?: string;
+    maxComments?: number;
+    snapshot?: { baseSha: string; actorLogin: string; ensureCurrent: () => Promise<void> };
+  }
 ): Promise<{ reviewId: number; commentsPosted: number; commentsSkipped: number }> {
   const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(
     /\/$/,
     ''
   );
-  const headers: Record<string, string> = {
-    Accept: 'application/vnd.github+json',
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    'User-Agent': 'OpenRabbit-Bot/1.0',
-  };
+  const headers = gitHubPublishHeaders(token);
+  const endpoint = `${apiUrl}/repos/${owner}/${repo}/pulls/${pullNumber}/reviews`;
 
   const prepared = prepareInlineComments(findings, options?.rawDiff, {
     maxComments: options?.maxComments,
@@ -261,26 +309,40 @@ export async function postGitHubInlineReview(
     body: formatInlineCommentMarkdown(f, 'github'),
   }));
 
-  const res = await fetch(
-    `${apiUrl}/repos/${owner}/${repo}/pulls/${pullNumber}/reviews`,
-    {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        commit_id: commitSha,
-        event: 'COMMENT',
-        body: `🐇 **OpenRabbit** completed an inline code review with **${inlineComments.length}** comment(s)${formatSkippedSummary(prepared.skipped)}.`,
-        comments: inlineComments,
-      }),
+  let body = `🐇 **OpenRabbit** completed an inline code review with **${inlineComments.length}** comment(s)${formatSkippedSummary(prepared.skipped)}.`;
+  const snapshot = options?.snapshot;
+  if (snapshot) {
+    const head = commitSha.toLowerCase();
+    const base = snapshot.baseSha.toLowerCase();
+    if (!gitHubCommitSha.test(base) || !gitHubCommitSha.test(head)) {
+      throw new Error('Inline review publication requires full base and head commit SHAs.');
     }
-  );
+    const marker = `<!-- openrabbit-inline-review:${base}:${head} -->`;
+    const existing = await findGitHubPublication<GitHubInlinePublication>(
+      endpoint, headers,
+      (review) => review.state === 'COMMENTED' && review.commit_id?.toLowerCase() === head &&
+        isOwnedPublication(review, snapshot.actorLogin) && review.body?.trimEnd().endsWith('\n' + marker) === true
+    );
+    await snapshot.ensureCurrent();
+    if (existing) {
+      return { reviewId: existing.id, commentsPosted: 0, commentsSkipped: prepared.skipped.length };
+    }
+    body += '\n\n' + marker;
+  }
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ commit_id: commitSha, event: 'COMMENT', body, comments: inlineComments }),
+    signal: AbortSignal.timeout(30_000),
+  });
 
   if (!res.ok) {
     throw new Error(
       `Failed to post GitHub inline review (${res.status}): ${await res.text()}`
     );
   }
-  const data = (await res.json()) as any;
+  const data: GitHubPublication = await res.json();
   return {
     reviewId: data.id,
     commentsPosted: inlineComments.length,
@@ -340,26 +402,35 @@ async function isGitHubSnapshotCurrent(
     latest.baseBranch === snapshot.baseBranch && latest.headBranch === snapshot.headBranch;
 }
 
-async function publishGitHubPRReview(
+export async function publishGitHubPRReview(
   target: GitHubPRTarget & { token: string },
-  snapshot: GitHubPRSnapshot,
+  snapshot: { baseSha: string; headSha: string },
   review: ReviewResult,
-  allowDraft: boolean
+  isCurrent: () => Promise<boolean>,
+  actor?: string
 ): Promise<void> {
   const { owner, repo, pullNumber, token } = target;
   const key = `${owner}/${repo}#${pullNumber}`.toLowerCase();
   const previous = publishing.get(key) ?? Promise.resolve();
   const publication = previous.catch(() => {}).then(async () => {
-    if (!(await isGitHubSnapshotCurrent(target, snapshot, allowDraft))) {
-      throw new GitHubPRChangedError('PR changed during review.');
-    }
-    await upsertGitHubWalkthroughComment(owner, repo, pullNumber, review.markdownWalkthrough, token);
-    if (review.findings.length > 0) {
-      if (!(await isGitHubSnapshotCurrent(target, snapshot, allowDraft))) {
-        throw new GitHubPRChangedError('PR changed after posting the walkthrough. Skipped inline review.', true);
+    const actorLogin = actor ?? await resolveGitHubPublisher(token);
+    let postedWalkthrough = false;
+    const ensureCurrent = async () => {
+      if (!(await isCurrent())) {
+        const message = postedWalkthrough
+          ? 'PR changed after posting the walkthrough. Skipped inline review.'
+          : 'PR changed during review.';
+        throw new GitHubPRChangedError(message, postedWalkthrough);
       }
+    };
+    await upsertGitHubWalkthroughComment(owner, repo, pullNumber, review.markdownWalkthrough, token, {
+      actorLogin, ensureCurrent,
+    });
+    postedWalkthrough = true;
+    if (review.findings.length > 0) {
       await postGitHubInlineReview(owner, repo, pullNumber, snapshot.headSha, review.findings, token, {
         rawDiff: review.rawDiff,
+        snapshot: { baseSha: snapshot.baseSha, actorLogin, ensureCurrent },
       });
     }
   });
@@ -456,7 +527,8 @@ export async function handleGitHubWebhookEvent(
     try {
       const reviewResult = await reviewGitHubPR(target, snapshot, config);
       if (token) {
-        await publishGitHubPRReview({ ...target, token }, snapshot, reviewResult, policy.drafts);
+        await publishGitHubPRReview({ ...target, token }, snapshot, reviewResult,
+          () => isGitHubSnapshotCurrent(target, snapshot, policy.drafts));
       } else if (!(await isGitHubSnapshotCurrent(target, snapshot, policy.drafts))) {
         return skip('PR changed during review.');
       }
@@ -674,7 +746,8 @@ export async function runGitHubOnDemandReview(params: {
       : config;
     const review = await reviewGitHubPR(target, snapshot, reviewConfig);
     if (postComment && token) {
-      await publishGitHubPRReview({ ...target, token }, snapshot, review, true);
+      await publishGitHubPRReview({ ...target, token }, snapshot, review,
+        () => isGitHubSnapshotCurrent(target, snapshot, true));
     }
     return review;
   }

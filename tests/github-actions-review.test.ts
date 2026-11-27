@@ -64,9 +64,11 @@ it('publishes a fork review using the exact commits and the CI run head', async 
       response: new Response(diff),
       check: ({ headers }) => assert.equal(new Headers(headers).get('Accept'), 'application/vnd.github.diff'),
     },
-    { path: '/pulls/7', response: Response.json(pr) },
     { path: '/issues/7/comments?per_page=100', response: Response.json([]) },
+    { path: '/pulls/7', response: Response.json(pr) },
     { path: '/issues/7/comments', method: 'POST', response: Response.json({ id: 11 }) },
+    { path: '/pulls/7/reviews?per_page=100', response: Response.json([]) },
+    { path: '/pulls/7', response: Response.json(pr) },
     {
       path: '/pulls/7/reviews',
       method: 'POST',
@@ -94,6 +96,7 @@ for (const side of ['head', 'base'] as const) {
     mockGitHub(t,
       { path: '/pulls/7', response: Response.json(pr) },
       { path: comparePath, response: new Response(diff) },
+      { path: '/issues/7/comments?per_page=100', response: Response.json([]) },
       { path: '/pulls/7', response: Response.json(updated) },
     );
     const result = await reviewGitHubWorkflowRun({ run, repository, token: 'test', config });
