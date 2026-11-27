@@ -22,6 +22,23 @@ AI review.
 
 See the full [feature guide](docs/features.md).
 
+## See OpenRabbit in action
+
+**Dashboard.** Run a demo, check your connections, and revisit recent reviews.
+
+[![OpenRabbit dashboard showing the demo review button, server and engine status, and a recent TypeScript review](docs/images/dashboard.png)](docs/images/dashboard.png)
+
+<details>
+<summary>See an inline finding and its suggested patch</summary>
+
+[![OpenRabbit flags loose equality on a changed TypeScript line and offers a patch using strict equality](docs/images/inline-review.png)](docs/images/inline-review.png)
+
+</details>
+
+**CLI.** Review a diff from the terminal with the built-in engine and the ASCII rabbit.
+
+[![OpenRabbit CLI with the orange ASCII rabbit, a patch walkthrough, and a suggested TypeScript fix](docs/images/cli.png)](docs/images/cli.png)
+
 ## Documentation site
 
 The visual field manual is built from `docs/` into `site/` and deployed by the
