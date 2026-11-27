@@ -16,6 +16,7 @@ import {
 import { runPullRequestReview } from '../core/review-engine.js';
 import {
   remoteMemoryFilePath,
+  RemoteWorkspaceRefChangedError,
   withRemoteWorkspace,
 } from '../core/remote-workspace.js';
 import type {
@@ -39,6 +40,34 @@ function githubGitHost(): string {
 function dataDir(): string {
   return process.env.OPENRABBIT_DATA_DIR || path.join(process.cwd(), 'data');
 }
+
+const gitHubCommitSha = /^[a-f0-9]{40}$/i;
+
+export class GitHubPRChangedError extends Error {
+  constructor(message: string, readonly postedToGitHub = false) {
+    super(message);
+  }
+}
+
+interface GitHubPRTarget {
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  token?: string;
+}
+
+interface GitHubPRSnapshot {
+  title: string;
+  author: string;
+  state: 'open' | 'closed';
+  draft: boolean;
+  baseSha: string;
+  baseBranch: string;
+  headSha: string;
+  headBranch: string;
+}
+
+const publishing = new Map<string, Promise<void>>();
 
 export function verifyGitHubWebhookSignature(
   rawBody: string,
@@ -89,7 +118,8 @@ export async function fetchGitHubRepoConfig(
   owner: string,
   repo: string,
   ref: string,
-  token?: string
+  token?: string,
+  fallbackConfig: OpenRabbitConfig = DEFAULT_OPENRABBIT_CONFIG
 ): Promise<OpenRabbitConfig> {
   const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(
     /\/$/,
@@ -101,23 +131,42 @@ export async function fetchGitHubRepoConfig(
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  for (const filename of ['.openrabbit.yaml', '.openrabbit.yml', '.coderabbit.yaml']) {
-    try {
-      const res = await fetch(
-        `${apiUrl}/repos/${owner}/${repo}/contents/${filename}?ref=${encodeURIComponent(
-          ref
-        )}`,
-        { headers }
-      );
-      if (res.ok) {
-        const rawYaml = await res.text();
-        return parseYamlConfig(rawYaml);
-      }
-    } catch {
-      // Ignore and try next
+  for (const filename of ['.openrabbit.yaml', '.openrabbit.yml', '.coderabbit.yaml', '.coderabbit.yml']) {
+    const res = await fetch(
+      `${apiUrl}/repos/${owner}/${repo}/contents/${filename}?ref=${encodeURIComponent(ref)}`,
+      { headers, signal: AbortSignal.timeout(30_000) }
+    );
+    if (res.status === 404) continue;
+    if (!res.ok) {
+      throw new Error(`Failed to fetch GitHub review configuration (${res.status}).`);
     }
+    return parseYamlConfig(await res.text());
   }
-  return structuredClone(DEFAULT_OPENRABBIT_CONFIG);
+  return structuredClone(fallbackConfig);
+}
+
+export async function fetchGitHubCompareDiff(
+  owner: string,
+  repo: string,
+  baseSha: string,
+  headSha: string,
+  token?: string
+): Promise<string> {
+  if (!gitHubCommitSha.test(baseSha) || !gitHubCommitSha.test(headSha)) {
+    throw new Error('GitHub comparison requires full base and head commit SHAs.');
+  }
+  const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.diff',
+    'User-Agent': 'OpenRabbit-Bot/1.0',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${apiUrl}/repos/${owner}/${repo}/compare/${baseSha}...${headSha}`, {
+    headers,
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(`Failed to fetch pinned GitHub diff (${res.status}).`);
+  return res.text();
 }
 
 export async function upsertGitHubWalkthroughComment(
@@ -239,6 +288,89 @@ export async function postGitHubInlineReview(
   };
 }
 
+async function reviewGitHubPR(
+  target: GitHubPRTarget,
+  snapshot: GitHubPRSnapshot,
+  config: OpenRabbitConfig
+): Promise<ReviewResult> {
+  const { owner, repo, pullNumber, token } = target;
+  const repository = `${owner}/${repo}`;
+  const rawDiff = await fetchGitHubCompareDiff(owner, repo, snapshot.baseSha, snapshot.headSha, token);
+  const providerHost = githubGitHost();
+  try {
+    return await withRemoteWorkspace(
+      {
+        cloneUrl: `https://${providerHost}/${repository}.git`,
+        ref: `refs/pull/${pullNumber}/head`,
+        expectedCommit: snapshot.headSha,
+        providerHost,
+        auth: token ? { username: 'x-access-token', password: token } : undefined,
+      },
+      ({ path: repoPath }) => runPullRequestReview({
+        rawDiff,
+        prTitle: snapshot.title,
+        repository,
+        prNumber: pullNumber,
+        author: snapshot.author,
+        baseBranch: snapshot.baseBranch,
+        headBranch: snapshot.headBranch,
+        commitSha: snapshot.headSha,
+        source: 'github',
+        config,
+        repoPath,
+        memoryFilePath: remoteMemoryFilePath(dataDir(), 'github', repository),
+      })
+    );
+  } catch (error) {
+    if (error instanceof RemoteWorkspaceRefChangedError) {
+      throw new GitHubPRChangedError('PR head changed before checkout.');
+    }
+    throw error;
+  }
+}
+
+async function isGitHubSnapshotCurrent(
+  target: GitHubPRTarget,
+  snapshot: GitHubPRSnapshot,
+  allowDraft: boolean
+): Promise<boolean> {
+  const latest = await fetchGitHubPRSnapshot(target);
+  return latest.state === 'open' && (allowDraft || !latest.draft) &&
+    latest.headSha === snapshot.headSha && latest.baseSha === snapshot.baseSha &&
+    latest.baseBranch === snapshot.baseBranch && latest.headBranch === snapshot.headBranch;
+}
+
+async function publishGitHubPRReview(
+  target: GitHubPRTarget & { token: string },
+  snapshot: GitHubPRSnapshot,
+  review: ReviewResult,
+  allowDraft: boolean
+): Promise<void> {
+  const { owner, repo, pullNumber, token } = target;
+  const key = `${owner}/${repo}#${pullNumber}`.toLowerCase();
+  const previous = publishing.get(key) ?? Promise.resolve();
+  const publication = previous.catch(() => {}).then(async () => {
+    if (!(await isGitHubSnapshotCurrent(target, snapshot, allowDraft))) {
+      throw new GitHubPRChangedError('PR changed during review.');
+    }
+    await upsertGitHubWalkthroughComment(owner, repo, pullNumber, review.markdownWalkthrough, token);
+    if (review.findings.length > 0) {
+      if (!(await isGitHubSnapshotCurrent(target, snapshot, allowDraft))) {
+        throw new GitHubPRChangedError('PR changed after posting the walkthrough. Skipped inline review.', true);
+      }
+      await postGitHubInlineReview(owner, repo, pullNumber, snapshot.headSha, review.findings, token, {
+        rawDiff: review.rawDiff,
+      });
+    }
+  });
+  publishing.set(key, publication);
+  try {
+    await publication;
+  } finally {
+    if (publishing.get(key) === publication) publishing.delete(key);
+  }
+}
+
 export interface GitHubWebhookResult {
   handled: boolean;
   action: string;
@@ -265,94 +397,79 @@ export async function handleGitHubWebhookEvent(
       };
     }
 
-    const pr = payload.pull_request || {};
-    const repoFull = payload.repository?.full_name || 'org/repo';
-    const [owner, repo] = repoFull.split('/');
-    const pullNumber = Number(pr.number || payload.number || 1);
-    const prTitle = pr.title || 'Pull Request';
-    const commitSha = pr.head?.sha || 'HEAD';
-    const baseBranch = pr.base?.ref || 'main';
-    const headBranch = pr.head?.ref || 'feat/update';
-    const author = pr.user?.login || 'developer';
+    const eventPR = payload.pull_request || {};
+    const repoFull = payload.repository?.full_name;
+    const pullNumber = Number(eventPR.number || payload.number);
+    const skip = (reason: string, postedToGitHub = false): GitHubWebhookResult => ({
+      handled: false,
+      action: reason,
+      postedToGitHub,
+    });
 
-    if (pr.draft && !fallbackConfig.reviews.auto_review.drafts) {
+    if (payload.simulated_diff) {
+      if (eventPR.draft && !fallbackConfig.reviews.auto_review.drafts) {
+        return skip('Skipped draft PR (reviews.auto_review.drafts is false)');
+      }
+      const repository = repoFull || 'org/repo';
+      const reviewResult = await runPullRequestReview({
+        rawDiff: payload.simulated_diff,
+        prTitle: eventPR.title || 'Pull Request',
+        repository,
+        prNumber: pullNumber || 1,
+        author: eventPR.user?.login || 'developer',
+        baseBranch: eventPR.base?.ref || 'main',
+        headBranch: eventPR.head?.ref || 'feat/update',
+        commitSha: eventPR.head?.sha || 'HEAD',
+        source: 'github',
+        config: fallbackConfig,
+        memoryFilePath: remoteMemoryFilePath(dataDir(), 'github', repository),
+      });
       return {
-        handled: false,
-        action: 'Skipped draft PR (reviews.auto_review.drafts is false)',
+        handled: true,
+        action: `Reviewed PR #${reviewResult.prNumber} (${action})`,
+        reviewResult,
         postedToGitHub: false,
       };
     }
 
-    let rawDiff = payload.simulated_diff || '';
-    let config = fallbackConfig;
+    const expectedHead: unknown = eventPR.head?.sha;
+    if (typeof repoFull !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repoFull) ||
+        !Number.isSafeInteger(pullNumber) || pullNumber < 1 ||
+        typeof expectedHead !== 'string' || !gitHubCommitSha.test(expectedHead)) {
+      return skip('Skipped PR event with incomplete snapshot metadata.');
+    }
+    const [owner, repo] = repoFull.split('/');
+    const target = { owner, repo, pullNumber, token };
+    const snapshot = await fetchGitHubPRSnapshot(target);
+    if (snapshot.state !== 'open' || snapshot.headSha !== expectedHead.toLowerCase()) {
+      return skip('Skipped PR event because its head is no longer current.');
+    }
 
-    if (!rawDiff && owner && repo) {
-      rawDiff = await fetchGitHubPRDiff(owner, repo, pullNumber, token);
+    const config = token
+      ? await fetchGitHubRepoConfig(owner, repo, snapshot.baseSha, token, fallbackConfig)
+      : fallbackConfig;
+    const policy = config.reviews.auto_review;
+    if (!policy.enabled || (snapshot.draft && !policy.drafts) ||
+        (policy.base_branches.length > 0 && !policy.base_branches.includes(snapshot.baseBranch))) {
+      return skip('Skipped PR under the base branch automatic review policy.');
+    }
+    try {
+      const reviewResult = await reviewGitHubPR(target, snapshot, config);
       if (token) {
-        config = await fetchGitHubRepoConfig(owner, repo, commitSha, token);
+        await publishGitHubPRReview({ ...target, token }, snapshot, reviewResult, policy.drafts);
+      } else if (!(await isGitHubSnapshotCurrent(target, snapshot, policy.drafts))) {
+        return skip('PR changed during review.');
       }
+      return {
+        handled: true,
+        action: `Reviewed PR #${pullNumber} (${action})`,
+        reviewResult,
+        postedToGitHub: Boolean(token),
+      };
+    } catch (error) {
+      if (error instanceof GitHubPRChangedError) return skip(error.message, error.postedToGitHub);
+      throw error;
     }
-
-    const runReview = (repoPath?: string) =>
-      runPullRequestReview({
-        rawDiff,
-        prTitle,
-        repository: repoFull,
-        prNumber: pullNumber,
-        author,
-        baseBranch,
-        headBranch,
-        commitSha,
-        source: 'github',
-        config,
-        repoPath,
-        memoryFilePath: remoteMemoryFilePath(dataDir(), 'github', repoFull),
-      });
-
-    const reviewResult = payload.simulated_diff
-      ? await runReview()
-      : await withRemoteWorkspace(
-          {
-            cloneUrl:
-              pr.head?.repo?.clone_url || payload.repository?.clone_url || '',
-            ref: `refs/pull/${pullNumber}/head`,
-            providerHost: githubGitHost(),
-            auth: token
-              ? { username: 'x-access-token', password: token }
-              : undefined,
-          },
-          (workspace) => runReview(workspace.path)
-        );
-
-    let postedToGitHub = false;
-    if (token && !payload.simulated_diff && owner && repo) {
-      await upsertGitHubWalkthroughComment(
-        owner,
-        repo,
-        pullNumber,
-        reviewResult.markdownWalkthrough,
-        token
-      );
-      if (reviewResult.findings.length > 0) {
-        await postGitHubInlineReview(
-          owner,
-          repo,
-          pullNumber,
-          commitSha,
-          reviewResult.findings,
-          token,
-          { rawDiff }
-        );
-      }
-      postedToGitHub = true;
-    }
-
-    return {
-      handled: true,
-      action: `Reviewed PR #${pullNumber} (${action})`,
-      reviewResult,
-      postedToGitHub,
-    };
   }
 
   // 2. Handle @openrabbit interactive comments on PRs
@@ -451,18 +568,23 @@ export async function fetchGitHubCommitDiff(
   return await res.text();
 }
 
-export async function fetchGitHubPRDetails(
-  owner: string,
-  repo: string,
-  pullNumber: number,
-  token?: string
-): Promise<{
-  title: string;
-  headSha: string;
-  baseBranch: string;
-  headBranch: string;
-  author: string;
-}> {
+interface GitHubPRResponse {
+  title?: string;
+  state?: string;
+  draft?: boolean;
+  head?: { sha?: string; ref?: string };
+  base?: { sha?: string; ref?: string };
+  user?: { login?: string } | null;
+}
+
+async function fetchGitHubPullRequest({
+  owner, repo, pullNumber, token,
+}: GitHubPRTarget): Promise<GitHubPRResponse> {
+  if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo) ||
+      owner === '.' || owner === '..' || repo === '.' || repo === '..' ||
+      !Number.isSafeInteger(pullNumber) || pullNumber < 1) {
+    throw new Error('Invalid GitHub pull request target.');
+  }
   const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(
     /\/$/,
     ''
@@ -475,20 +597,57 @@ export async function fetchGitHubPRDetails(
 
   const res = await fetch(
     `${apiUrl}/repos/${owner}/${repo}/pulls/${pullNumber}`,
-    { headers }
+    { headers, signal: AbortSignal.timeout(30_000) }
   );
   if (!res.ok) {
     throw new Error(
       `Failed to fetch GitHub PR details (${res.status}): ${await res.text()}`
     );
   }
-  const data = (await res.json()) as any;
+  return res.json();
+}
+
+export async function fetchGitHubPRDetails(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  token?: string
+): Promise<{
+  title: string;
+  headSha: string;
+  baseBranch: string;
+  headBranch: string;
+  author: string;
+}> {
+  const data = await fetchGitHubPullRequest({ owner, repo, pullNumber, token });
   return {
     title: data.title || `PR #${pullNumber}`,
     headSha: data.head?.sha || 'HEAD',
     baseBranch: data.base?.ref || 'main',
     headBranch: data.head?.ref || 'update',
     author: data.user?.login || 'developer',
+  };
+}
+
+async function fetchGitHubPRSnapshot(target: GitHubPRTarget): Promise<GitHubPRSnapshot> {
+  const data = await fetchGitHubPullRequest(target);
+  const headSha = data.head?.sha;
+  const baseSha = data.base?.sha;
+  const headBranch = data.head?.ref;
+  const baseBranch = data.base?.ref;
+  if (!headSha || !gitHubCommitSha.test(headSha) || !baseSha || !gitHubCommitSha.test(baseSha) ||
+      !headBranch || !baseBranch || (data.state !== 'open' && data.state !== 'closed')) {
+    throw new Error('GitHub PR is missing valid base or head snapshot metadata.');
+  }
+  return {
+    title: data.title || `PR #${target.pullNumber}`,
+    author: data.user?.login || 'developer',
+    state: data.state,
+    draft: data.draft === true,
+    headSha: headSha.toLowerCase(),
+    baseSha: baseSha.toLowerCase(),
+    headBranch,
+    baseBranch,
   };
 }
 
@@ -501,110 +660,37 @@ export async function runGitHubOnDemandReview(params: {
   postComment?: boolean;
   config?: OpenRabbitConfig;
 }): Promise<ReviewResult> {
+  const { owner, repo, pullNumber, commitSha, postComment } = params;
   const token = params.token || process.env.GITHUB_TOKEN;
-  let rawDiff = '';
-  let prTitle = `GitHub Review: ${params.owner}/${params.repo}`;
-  let commitSha = params.commitSha || 'HEAD';
-  let baseBranch: string | undefined = undefined;
-  let headBranch: string | undefined = undefined;
-  let author: string | undefined = undefined;
-
-  let config = params.config || structuredClone(DEFAULT_OPENRABBIT_CONFIG);
-
-  if (params.pullNumber) {
-    rawDiff = await fetchGitHubPRDiff(
-      params.owner,
-      params.repo,
-      params.pullNumber,
-      token
-    );
-    try {
-      const details = await fetchGitHubPRDetails(
-        params.owner,
-        params.repo,
-        params.pullNumber,
-        token
-      );
-      prTitle = details.title;
-      commitSha = details.headSha;
-      baseBranch = details.baseBranch;
-      headBranch = details.headBranch;
-      author = details.author;
-    } catch {
-      prTitle = `PR #${params.pullNumber} (${params.owner}/${params.repo})`;
+  const config = params.config || DEFAULT_OPENRABBIT_CONFIG;
+  if (pullNumber !== undefined) {
+    const target = { owner, repo, pullNumber, token };
+    const snapshot = await fetchGitHubPRSnapshot(target);
+    if (postComment && token && snapshot.state !== 'open') {
+      throw new GitHubPRChangedError('PR must be open to publish a review.');
     }
-    if (token) {
-      config = await fetchGitHubRepoConfig(
-        params.owner,
-        params.repo,
-        commitSha,
-        token
-      );
+    const reviewConfig = token
+      ? await fetchGitHubRepoConfig(owner, repo, snapshot.baseSha, token, config)
+      : config;
+    const review = await reviewGitHubPR(target, snapshot, reviewConfig);
+    if (postComment && token) {
+      await publishGitHubPRReview({ ...target, token }, snapshot, review, true);
     }
-  } else if (params.commitSha) {
-    rawDiff = await fetchGitHubCommitDiff(
-      params.owner,
-      params.repo,
-      params.commitSha,
-      token
-    );
-    prTitle = `Commit ${params.commitSha.slice(0, 7)} (${params.owner}/${params.repo})`;
-  } else {
+    return review;
+  }
+  if (!commitSha) {
     throw new Error('Either pullNumber or commitSha is required');
   }
 
-  const repoFull = `${params.owner}/${params.repo}`;
-  const runReview = (repoPath?: string) =>
-    runPullRequestReview({
-      rawDiff,
-      prTitle,
-      repository: repoFull,
-      prNumber: params.pullNumber,
-      author,
-      baseBranch,
-      headBranch,
-      commitSha,
-      source: 'github',
-      config,
-      repoPath,
-      memoryFilePath: remoteMemoryFilePath(dataDir(), 'github', repoFull),
-    });
-
-  const reviewResult = params.pullNumber
-    ? await withRemoteWorkspace(
-        {
-          cloneUrl: `https://${githubGitHost()}/${params.owner}/${params.repo}.git`,
-          ref: `refs/pull/${params.pullNumber}/head`,
-          providerHost: githubGitHost(),
-          auth: token
-            ? { username: 'x-access-token', password: token }
-            : undefined,
-        },
-        (workspace) => runReview(workspace.path)
-      )
-    : await runReview();
-
-  if (params.postComment && token && params.pullNumber) {
-    await upsertGitHubWalkthroughComment(
-      params.owner,
-      params.repo,
-      params.pullNumber,
-      reviewResult.markdownWalkthrough,
-      token
-    );
-    if (reviewResult.findings.length > 0) {
-      await postGitHubInlineReview(
-        params.owner,
-        params.repo,
-        params.pullNumber,
-        commitSha,
-        reviewResult.findings,
-        token,
-        { rawDiff }
-      );
-    }
-  }
-
-  return reviewResult;
+  const repository = `${owner}/${repo}`;
+  const rawDiff = await fetchGitHubCommitDiff(owner, repo, commitSha, token);
+  return runPullRequestReview({
+    rawDiff,
+    prTitle: `Commit ${commitSha.slice(0, 7)} (${repository})`,
+    repository,
+    commitSha,
+    source: 'github',
+    config,
+    memoryFilePath: remoteMemoryFilePath(dataDir(), 'github', repository),
+  });
 }
-

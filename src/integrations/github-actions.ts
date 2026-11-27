@@ -1,6 +1,6 @@
 import { runPullRequestReview } from '../core/review-engine.js';
 import type { OpenRabbitConfig } from '../types/index.js';
-import { postGitHubInlineReview, upsertGitHubWalkthroughComment } from './github.js';
+import { fetchGitHubCompareDiff, postGitHubInlineReview, upsertGitHubWalkthroughComment } from './github.js';
 
 interface WorkflowRun {
   event?: string;
@@ -48,10 +48,10 @@ export async function reviewGitHubWorkflowRun({
   }
 
   const apiUrl = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
-  async function get(path: string, accept = 'application/vnd.github+json'): Promise<Response> {
+  async function get(path: string): Promise<Response> {
     const response = await fetch(`${apiUrl}/repos/${repository}${path}`, {
       headers: {
-        Accept: accept,
+        Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${token}`,
         'User-Agent': 'OpenRabbit-Bot/1.0',
       },
@@ -101,9 +101,8 @@ export async function reviewGitHubWorkflowRun({
     throw new Error('Invalid GitHub PR snapshot metadata.');
   }
 
-  // Compare immutable commits so pushes during analysis cannot change the diff.
-  const diff = await get(`/compare/${baseSha}...${headSha}`, 'application/vnd.github.diff');
-  const rawDiff = await diff.text();
+  const [owner, repo] = repository.split('/');
+  const rawDiff = await fetchGitHubCompareDiff(owner, repo, baseSha, headSha, token);
   const review = await runPullRequestReview({
     rawDiff,
     prTitle: pr.title,
@@ -123,7 +122,6 @@ export async function reviewGitHubWorkflowRun({
     return 'Skipped publication because the PR changed during review.';
   }
 
-  const [owner, repo] = repository.split('/');
   await upsertGitHubWalkthroughComment(owner, repo, pr.number, review.markdownWalkthrough, token);
   if (review.findings.length > 0) {
     await postGitHubInlineReview(owner, repo, pr.number, headSha, review.findings, token, { rawDiff });
